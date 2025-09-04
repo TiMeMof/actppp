@@ -15,13 +15,21 @@ import IPython
 e = IPython.embed
 
 
+# VAE 中 的重参数化技巧
 def reparametrize(mu, logvar):
+    # 对数方差除以2，然后对结果取指数，得到方差的平方根，即标准差
     std = logvar.div(2).exp()
+    # 生成随机噪声
     eps = Variable(std.data.new(std.size()).normal_())
     return mu + std * eps
 
 
+# 生成正弦波编码表
+# n_position：表示编码表中的位置数，即序列的最大长度。
+# d_hid：表示隐藏层的维度，即编码向量的大小。
+# 返回一个形状为 (1, n_position, d_hid) 的张量，包含了位置编码信息。
 def get_sinusoid_encoding_table(n_position, d_hid):
+    # 得到正弦波编码表
     def get_position_angle_vec(position):
         return [position / np.power(10000, 2 * (hid_j // 2) / d_hid) for hid_j in range(d_hid)]
 
@@ -258,9 +266,29 @@ def build_encoder(args):
     normalize_before = args.pre_norm # False
     activation = "relu"
 
+# TransformerEncoder
+# ├── TransformerEncoderLayer (x4)
+# │   └── 具体结构见transformer.py
+# └── 最终LayerNorm (如果normalize_before=True)
+
+    # 创建编码器层
+    '''
+    d_model,               # 输入维度
+    nhead,                # 注意力头数
+    dim_feedforward,      # 前馈网络维度
+    dropout,              # dropout率
+    activation,           # 激活函数（relu）
+    normalize_before      # 位置归一化选项
+    '''
     encoder_layer = TransformerEncoderLayer(d_model, nhead, dim_feedforward,
                                             dropout, activation, normalize_before)
     encoder_norm = nn.LayerNorm(d_model) if normalize_before else None
+    # 构建完整编码器
+    '''
+    encoder_layer,         # 编码器层
+    num_encoder_layers,    # 层数
+    encoder_norm           # 归一化层
+    '''
     encoder = TransformerEncoder(encoder_layer, num_encoder_layers, encoder_norm)
 
     return encoder

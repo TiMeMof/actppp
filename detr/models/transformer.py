@@ -148,6 +148,7 @@ class TransformerEncoderLayer(nn.Module):
         super().__init__()
         self.self_attn = nn.MultiheadAttention(d_model, nhead, dropout=dropout)
         # Implementation of Feedforward model
+        # 前馈神经网络（FFN）
         self.linear1 = nn.Linear(d_model, dim_feedforward)
         self.dropout = nn.Dropout(dropout)
         self.linear2 = nn.Linear(dim_feedforward, d_model)
@@ -169,11 +170,15 @@ class TransformerEncoderLayer(nn.Module):
                      src_key_padding_mask: Optional[Tensor] = None,
                      pos: Optional[Tensor] = None):
         q = k = self.with_pos_embed(src, pos)
+        # Multi-head Self-Attention
         src2 = self.self_attn(q, k, value=src, attn_mask=src_mask,
                               key_padding_mask=src_key_padding_mask)[0]
+        # Add & Norm
         src = src + self.dropout1(src2)
         src = self.norm1(src)
+        # FFN
         src2 = self.linear2(self.dropout(self.activation(self.linear1(src))))
+        # Add & Norm
         src = src + self.dropout2(src2)
         src = self.norm2(src)
         return src

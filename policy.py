@@ -238,6 +238,7 @@ class ACTPolicy(nn.Module):
 
     @torch.no_grad()
     def vq_encode(self, qpos, actions, is_pad):
+        # 对动作进行向量量化编码
         actions = actions[:, :self.model.num_queries]
         is_pad = is_pad[:, :self.model.num_queries]
 
