@@ -145,3 +145,5 @@ ckpts/
 *.png
 *.npy
 play.ipynb
+
+ckpt/

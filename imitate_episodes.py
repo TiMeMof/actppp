@@ -52,6 +52,7 @@ def main(args):
 
     # get task parameters
     is_sim = task_name[:4] == 'sim_'
+    # is_sim = True
     if is_sim or task_name == 'all':
         from constants import SIM_TASK_CONFIGS
         task_config = SIM_TASK_CONFIGS[task_name]
@@ -145,7 +146,7 @@ def main(args):
     config_path = os.path.join(ckpt_dir, 'config.pkl')
     expr_name = ckpt_dir.split('/')[-1]
     if not is_eval:
-        wandb.init(project="mobile-aloha2", reinit=True, entity="mobile-aloha2", name=expr_name)
+        wandb.init(project="act", reinit=True, name=expr_name)
         wandb.config.update(config)
     with open(config_path, 'wb') as f:
         pickle.dump(config, f)
@@ -593,8 +594,8 @@ def train_bc(train_dataloader, val_dataloader, config):
             ckpt_name = f'policy_step_{step}_seed_{seed}.ckpt'
             ckpt_path = os.path.join(ckpt_dir, ckpt_name)
             torch.save(policy.serialize(), ckpt_path)
-            success, _ = eval_bc(config, ckpt_name, save_episode=True, num_rollouts=10)
-            wandb.log({'success': success}, step=step)
+            # success, _ = eval_bc(config, ckpt_name, save_episode=True, num_rollouts=10)
+            # wandb.log({'success': success}, step=step)
 
         # training
         policy.train()
