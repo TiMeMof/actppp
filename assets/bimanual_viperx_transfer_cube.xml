@@ -5,6 +5,15 @@
         <include file="vx300s_left.xml" />
         <include file="vx300s_right.xml" />
 
+        <body name="xyz" pos="0. 0. 0.">
+            <!-- X轴（红色，10cm长） -->
+            <geom type="capsule" size="0.005" fromto="0 0 0 0.1 0 0" rgba="1 0 0 1"/>
+            <!-- Y轴（绿色，10cm长） -->
+            <geom type="capsule" size="0.005" fromto="0 0 0 0 0.1 0" rgba="0 1 0 1"/>
+            <!-- Z轴（蓝色，10cm长） -->
+            <geom type="capsule" size="0.005" fromto="0 0 0 0 0 0.1" rgba="0 0 1 1"/>
+        </body>
+
         <body name="box" pos="0.2 0.5 0.05">
             <joint name="red_box_joint" type="free" frictionloss="0.01" />
             <inertial pos="0 0 0" mass="0.05" diaginertia="0.002 0.002 0.002" />
@@ -36,6 +45,7 @@
 
     <keyframe>
         <key qpos="0 -0.96 1.16 0 -0.3 0 0.024 -0.024  0 -0.96 1.16 0 -0.3 0 0.024 -0.024  0.2 0.5 0.05 1 0 0 0"/>
+        <!-- <key qpos="0 -0 0 0 0 0 0 -0  0 -0 0 0 0 0 0 0  0.0 0.0 0.0 0 0 0 0"/> -->
     </keyframe>
 
 

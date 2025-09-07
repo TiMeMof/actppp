@@ -23,6 +23,7 @@
                             <joint name="vx300s_left/wrist_angle" pos="0 0 0" axis="0 1 0" limited="true" range="-1.8675 2.23402" frictionloss="30" />
                             <geom quat="0.707107 0 0 0.707107" type="mesh" mesh="vx300s_6_wrist" name="vx300s_left/6_wrist" />
                             <body name="vx300s_left/gripper_link" pos="0.069744 0 0">
+                                <site name="left_ee_site" pos="0 0 0" size="0.01" type="sphere" rgba="1 0 0 1"/>
                                 <body name="vx300s_left/camera_focus" pos="0.15 0 0.01">
                                     <site pos="0 0 0" size="0.01" type="sphere" name="left_cam_focus" rgba="0 0 1 0"/>
                                 </body>
