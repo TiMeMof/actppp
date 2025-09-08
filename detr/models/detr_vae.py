@@ -294,7 +294,7 @@ def build_encoder(args):
     return encoder
 
 
-def build(args):
+def build_vae(args):
     state_dim = 14 # TODO hardcode
 
     # From state

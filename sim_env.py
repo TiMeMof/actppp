@@ -80,8 +80,10 @@ class BimanualViperXTask(base.Task):
         qpos_raw = physics.data.qpos.copy()
         left_qpos_raw = qpos_raw[:8]
         right_qpos_raw = qpos_raw[8:16]
+        # 对应6个机械连杆名称[waist, shoulder, elbow, forearm_roll, wrist_angle, wrist_rotate]
         left_arm_qpos = left_qpos_raw[:6]
         right_arm_qpos = right_qpos_raw[:6]
+        # 归一化夹爪位置
         left_gripper_qpos = [PUPPET_GRIPPER_POSITION_NORMALIZE_FN(left_qpos_raw[6])]
         right_gripper_qpos = [PUPPET_GRIPPER_POSITION_NORMALIZE_FN(right_qpos_raw[6])]
         return np.concatenate([left_arm_qpos, left_gripper_qpos, right_arm_qpos, right_gripper_qpos])
