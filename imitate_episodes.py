@@ -11,6 +11,7 @@ from einops import rearrange
 import wandb
 import time
 from torchvision import transforms
+import arm_FK
 
 from constants import FPS
 from constants import PUPPET_GRIPPER_JOINT_OPEN
@@ -228,6 +229,7 @@ def get_image(ts, camera_names, rand_crop_resize=False):
 
 def eval_bc(config, ckpt_name, save_episode=True, num_rollouts=50):
     set_seed(1000)
+    print(f'========================================Evaluating {ckpt_name} ...')
     ckpt_dir = config['ckpt_dir']
     state_dim = config['state_dim']
     real_robot = config['real_robot']
@@ -332,7 +334,10 @@ def eval_bc(config, ckpt_name, save_episode=True, num_rollouts=50):
         ### onscreen render
         if onscreen_render:
             ax = plt.subplot()
-            plt_img = ax.imshow(env._physics.render(height=480, width=640, camera_id=onscreen_cam))
+            img = np.zeros((480*2, 640 *2, 3), dtype=np.uint8)
+            plt_img = ax.imshow(img)
+            # plt_img = ax.imshow(env._physics.render(height=480, width=640, camera_id=onscreen_cam))
+            # 这里的ion的作用是开启交互模式，使得后续的绘图操作能够实时更新显示，而不需要阻塞程序的执行。
             plt.ion()
 
         ### evaluation loop
@@ -356,7 +361,16 @@ def eval_bc(config, ckpt_name, save_episode=True, num_rollouts=50):
                 ### update onscreen render and wait for DT
                 if onscreen_render:
                     image = env._physics.render(height=480, width=640, camera_id=onscreen_cam)
-                    plt_img.set_data(image)
+                    imgs = []
+                    imgs.append(image)
+                    for img_name in camera_names:
+                        imgs.append(env._physics.render(height=480, width=640, camera_id=img_name))
+                    # 创建上半部分和下半部分的图像
+                    row1 = np.hstack((imgs[0], imgs[1]))  # 第一行：第一张和第二张图像水平拼接
+                    row2 = np.hstack((imgs[2], imgs[3]))  # 第二行：第三张和第四张图像水平拼接
+                    # 将上半部分和下半部分垂直拼接起来形成2x2网格
+                    combined_img = np.vstack((row1, row2))  # 将两行垂直拼接
+                    plt_img.set_data(combined_img)
                     plt.pause(DT)
 
                 ### process previous timestep to get qpos and image_list
@@ -367,6 +381,14 @@ def eval_bc(config, ckpt_name, save_episode=True, num_rollouts=50):
                 else:
                     image_list.append({'main': obs['image']})
                 qpos_numpy = np.array(obs['qpos'])
+                ee = np.array(obs['ee'])
+                # print("=====left pos:" ,ee[:3])
+                left_quat = ee[3:7]
+                left_rot = arm_FK.quat_to_euler(left_quat)
+                right_quat = ee[10:14]
+                right_rot = arm_FK.quat_to_euler(right_quat)
+                print("rot:", right_rot)
+                # print("=====right pos:" ,ee[7:10])
                 qpos_history_raw[t] = qpos_numpy
                 qpos = pre_process(qpos_numpy)
                 qpos = torch.from_numpy(qpos).float().cuda().unsqueeze(0)
@@ -472,7 +494,7 @@ def eval_bc(config, ckpt_name, save_episode=True, num_rollouts=50):
                 # time.sleep(max(0, DT - duration - culmulated_delay))
                 if duration >= DT:
                     culmulated_delay += (duration - DT)
-                    print(f'Warning: step duration: {duration:.3f} s at step {t} longer than DT: {DT} s, culmulated delay: {culmulated_delay:.3f} s')
+                    # print(f'Warning: step duration: {duration:.3f} s at step {t} longer than DT: {DT} s, culmulated delay: {culmulated_delay:.3f} s')
                 # else:
                 #     culmulated_delay = max(0, culmulated_delay - (DT - duration))
 

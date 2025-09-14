@@ -2,6 +2,8 @@ import numpy as np
 import os
 import collections
 import matplotlib.pyplot as plt
+import mujoco as mj
+from arm_FK import matrix_to_euler
 from dm_control import mujoco
 from dm_control.rl import control
 from dm_control.suite import base
@@ -51,9 +53,47 @@ def make_sim_env(task_name):
         raise NotImplementedError
     return env
 
+
+def ik_solve(physics:mujoco.Physics, site_name, target_pos, old_pos, qpos_init, max_iter=10, tol=1e-4, step_size=0.1):
+    site_id = physics.model.name2id(site_name, "site")
+    q = qpos_init.copy()
+    for i in range(max_iter):
+        # # 更新 physics data 使之反映当前 q
+        # physics.data.qpos[8:14] = q   # 假设 right arm 在 qpos 的 8:14
+        # mujoco.mj_forward(physics.model.ptr, physics.data.ptr)
+
+        # current_pos = physics.data.site_xpos[site_id].copy()
+        err = target_pos - old_pos
+        print("itttttt",err)
+        
+        if np.linalg.norm(err) < tol:
+            break
+        
+        # 雅可比矩阵
+        jacp = np.zeros((3, physics.model.nv))
+        mujoco.mj_jacSite(physics.model.ptr, physics.data.ptr, jacp, None, site_id)
+        # jacp.shape=(3,22)
+
+        if site_name == "right_ee_site":
+            J = jacp[:, 8:14]
+        elif site_name == "left_ee_site":
+            J = jacp[:, :6]
+        
+        # 伪逆
+        dq = step_size * np.linalg.pinv(J) @ err
+        q = q + dq
+    return q
+
 class BimanualViperXTask(base.Task):
     def __init__(self, random=None):
         super().__init__(random=random)
+        # self.right_ee_pos_old=[0.]*3
+        # self.right_ee_pos=[0.]*3
+        # self.left_arm_qpos=[0.]*6
+        # self.left_arm_qpos_old=[0.]*6
+        # self.right_arm_qpos=[0.]*6
+        # self.right_arm_qpos_old=[0.]*6
+        # self.start = True
 
     def before_step(self, action, physics):
         left_arm_action = action[:6]
@@ -86,7 +126,66 @@ class BimanualViperXTask(base.Task):
         # 归一化夹爪位置
         left_gripper_qpos = [PUPPET_GRIPPER_POSITION_NORMALIZE_FN(left_qpos_raw[6])]
         right_gripper_qpos = [PUPPET_GRIPPER_POSITION_NORMALIZE_FN(right_qpos_raw[6])]
+        # from arm_FK import right_arm_fk, left_arm_fk
+        # # 计算正向运动学，验证 qpos 的正确性
+        # right_ee_pos_fk = right_arm_fk(right_arm_qpos)
+        # left_ee_pos_fk = left_arm_fk(left_arm_qpos)
+        # site_id = physics.model.name2id("right_ee_site", "site")
+        # site_pos = physics.data.site_xpos[site_id].copy()
+        # print("right fk err:", right_ee_pos_fk[:3,3] - site_pos)
+        # site_id = physics.model.name2id("left_ee_site", "site")
+        # site_pos = physics.data.site_xpos[site_id].copy()
+        # print("left fk err:", left_ee_pos_fk[:3,3] - site_pos)
         return np.concatenate([left_arm_qpos, left_gripper_qpos, right_arm_qpos, right_gripper_qpos])
+
+
+    
+    def get_ee_pose(self, physics):
+        
+
+
+        site_id = physics.model.name2id("left_ee_site", "site")
+        left_ee_pos = physics.data.site_xpos[site_id].copy()  # 有效
+        left_ee_mat = physics.data.site_xmat[site_id]
+        left_euler = matrix_to_euler(left_ee_mat)
+        left_quat=np.zeros(4)
+        # w x y z
+        mj.mju_mat2Quat(left_quat, left_ee_mat)
+
+        # left_ee_mat2 = np.zeros(9)
+        # np.reshape(left_ee_mat2, (3, 3))
+        # mj.mju_quat2Mat(left_ee_mat2,left_quat)
+        # left_euler2 = matrix_to_euler(left_ee_mat2)
+        # print("errrrrrrrrrr:",np.asarray(left_euler2) - np.asarray(left_euler))
+
+
+        # 得到现在的right ee位姿，以及旧的
+        site_id = physics.model.name2id("right_ee_site", "site")
+        right_ee_pos = physics.data.site_xpos[site_id].copy()           
+        right_ee_mat = physics.data.site_xmat[site_id]
+        right_euler = matrix_to_euler(right_ee_mat)
+        right_quat=np.zeros(4)
+        mj.mju_mat2Quat(right_quat, right_ee_mat)
+
+        # # 得到现在的关节角度，以及旧的
+        # qpos_raw = physics.data.qpos.copy()
+        # left_qpos_raw = qpos_raw[:8]
+        # right_qpos_raw = qpos_raw[8:16]
+        # self.left_arm_qpos_old = self.left_arm_qpos.copy()
+        # self.right_arm_qpos_old = self.right_arm_qpos.copy()
+        # if self.start:
+        #     self.left_arm_qpos_old = left_qpos_raw[:6]
+        #     self.right_arm_qpos_old = right_qpos_raw[:6]
+        #     self.start = False
+        # self.left_arm_qpos = left_qpos_raw[:6]
+        # self.right_arm_qpos = right_qpos_raw[:6]
+
+        # print("迭代之前误差：",self.right_ee_pos - self.right_ee_pos_old)
+        # print("迭代之前误差2：",self.right_arm_qpos - self.right_arm_qpos_old)
+        # qpos_ik = ik_solve(physics, "right_ee_site", self.right_ee_pos, self.right_ee_pos_old, self.right_arm_qpos_old)
+        # print("之后误差：",self.right_arm_qpos - qpos_ik)
+        
+        return left_ee_pos, left_euler, left_quat, right_ee_pos, right_euler, right_quat
 
     @staticmethod
     def get_qvel(physics):
@@ -108,6 +207,10 @@ class BimanualViperXTask(base.Task):
         obs['qpos'] = self.get_qpos(physics)
         obs['qvel'] = self.get_qvel(physics)
         obs['env_state'] = self.get_env_state(physics)
+        left_ee_pos, left_ee_euler,left_ee_quat,right_ee_pos,right_ee_euler,right_ee_quat = self.get_ee_pose(physics)
+        # 3 + 4 + 3 + 4
+        obs['ee'] = np.concatenate([left_ee_pos,left_ee_quat,right_ee_pos,right_ee_quat])
+        print(f"====={right_ee_euler}=====")
         obs['images'] = dict()
         obs['images']['top'] = physics.render(height=480, width=640, camera_id='top')
         obs['images']['left_wrist'] = physics.render(height=480, width=640, camera_id='left_wrist')

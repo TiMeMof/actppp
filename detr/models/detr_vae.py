@@ -59,9 +59,13 @@ class DETRVAE(nn.Module):
         self.encoder = encoder
         self.vq, self.vq_class, self.vq_dim = vq, vq_class, vq_dim
         self.state_dim, self.action_dim = state_dim, action_dim
+        # 隐藏层维度，通常与 transformer 的 d_model 相同
+        # d_model 是 transformer 中的一个重要参数，表示输入和输出的特征维度。
         hidden_dim = transformer.d_model
+        # 把 transformer 的输出转成机器人动作向量。
         self.action_head = nn.Linear(hidden_dim, action_dim)
         self.is_pad_head = nn.Linear(hidden_dim, 1)
+        # 这里的embedding层用于存储查询向量，这些查询向量在Transformer的解码器部分用于生成最终的输出。
         self.query_embed = nn.Embedding(num_queries, hidden_dim)
         if backbones is not None:
             self.input_proj = nn.Conv2d(backbones[0].num_channels, hidden_dim, kernel_size=1)
@@ -95,6 +99,7 @@ class DETRVAE(nn.Module):
         self.additional_pos_embed = nn.Embedding(2, hidden_dim) # learned position embedding for proprio and latent
 
 
+    # 实现了 VAE 编码器的功能，将输入数据（如机器人的位置 qpos 和动作序列 actions）编码为潜在空间的表示。
     def encode(self, qpos, actions=None, is_pad=None, vq_sample=None):
         bs, _ = qpos.shape
         if self.encoder is None:
@@ -295,6 +300,7 @@ def build_encoder(args):
 
 
 def build_vae(args):
+    # 这里直接改成16
     state_dim = 14 # TODO hardcode
 
     # From state
