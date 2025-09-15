@@ -300,7 +300,9 @@ def build_encoder(args):
 
 
 def build_vae(args):
-    # 这里直接改成16
+
+    state_dim = args.action_dim
+    # print("-----------------------------state_dim:::::", state_dim)
     state_dim = 14 # TODO hardcode
 
     # From state

@@ -376,6 +376,7 @@ def eval_bc(config, ckpt_name, save_episode=True, num_rollouts=50):
                 ### process previous timestep to get qpos and image_list
                 time2 = time.time()
                 obs = ts.observation
+                print(len(ts.observation['qpos']), ts.observation['qpos'])
                 if 'images' in obs:
                     image_list.append(obs['images'])
                 else:
