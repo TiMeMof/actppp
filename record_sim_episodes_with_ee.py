@@ -138,8 +138,7 @@ def main(args):
             '/observations/qpos': [],
             '/observations/qvel': [],
             '/observations/ee': [],
-            '/action_ee_left': [],
-            '/action_ee_right': [],
+            '/action_ee': [],
             '/action': [],
         }
         for cam_name in camera_names:
@@ -166,8 +165,7 @@ def main(args):
             data_dict['/observations/qpos'].append(ts.observation['qpos'])
             data_dict['/observations/qvel'].append(ts.observation['qvel'])
             data_dict['/observations/ee'].append(ts.observation['ee'])
-            data_dict['/action_ee_left'].append(ee_traj_left_cmd.pop(0))
-            data_dict['/action_ee_right'].append(ee_traj_right_cmd.pop(0))
+            data_dict['/action_ee'].append(np.concatenate([ee_traj_left_cmd.pop(0),[action[6]],ee_traj_right_cmd.pop(0),[action[13]]]))
             data_dict['/action'].append(action)
             for cam_name in camera_names:
                 data_dict[f'/observations/images/{cam_name}'].append(ts.observation['images'][cam_name])
@@ -187,8 +185,7 @@ def main(args):
             qpos = obs.create_dataset('qpos', (max_timesteps, 14))
             qvel = obs.create_dataset('qvel', (max_timesteps, 14))
             ee = obs.create_dataset('ee', (max_timesteps, 16))
-            ee_left = root.create_dataset('action_ee_left', (max_timesteps, 7))
-            ee_right = root.create_dataset('action_ee_right', (max_timesteps, 7))
+            action_ee = root.create_dataset('action_ee', (max_timesteps, 16))
             action = root.create_dataset('action', (max_timesteps, 14))
 
             for name, array in data_dict.items():
