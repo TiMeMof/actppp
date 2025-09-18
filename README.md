@@ -27,21 +27,18 @@ You can find all scripted/human demo for simulated environments [here](https://d
 
     conda create -n aloha python=3.8.10
     conda activate aloha
-    pip install torchvision
-    pip install torch
-    pip install pyquaternion
-    pip install pyyaml
-    pip install rospkg
-    pip install pexpect
-    pip install mujoco==2.3.7
-    pip install dm_control==1.0.14
-    pip install opencv-python
-    pip install matplotlib
-    pip install einops
-    pip install packaging
-    pip install h5py
-    pip install ipython
-    cd act/detr && pip install -e .
+    pip install -r requirement.txt
+    cd detr && pip install -e .
+    cd ..
+    git clone https://gitee.com/magicor/robomimic
+    cd robomimic
+    git checkout diffusion-policy-mg
+    pip install -v -e .
+    cd ..
+    git clone https://github.com/MarkFzp/mobile-aloha.git
+    cd mobile-aloha
+    pip install -e .
+
 
 - also need to install https://github.com/ARISE-Initiative/robomimic/tree/r2d2 (note the r2d2 branch) for Diffusion Policy by `pip install -e .`
 
@@ -69,7 +66,7 @@ Note: to visualize data from the mobile-aloha hardware, use the visualize_episod
 To train ACT:
     
     # Transfer Cube task
-    python3 imitate_episodes.py --task_name sim_transfer_cube_scripted --ckpt_dir <ckpt dir> --policy_class ACT --kl_weight 10 --chunk_size 100 --hidden_dim 512 --batch_size 8 --dim_feedforward 3200 --num_epochs 2000  --lr 1e-5 --seed 0
+    python3 imitate_episodes.py --task_name sim_transfer_cube_scripted --ckpt_dir <ckpt dir> --policy_class ACT --kl_weight 10 --chunk_size 100 --hidden_dim 512 --batch_size 8 --dim_feedforward 3200 --num_steps 2000  --lr 1e-5 --seed 0
 
 
 To evaluate the policy, run the same command but add ``--eval``. This loads the best validation checkpoint.
