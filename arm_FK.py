@@ -108,7 +108,9 @@ def matrix_to_euler(mat):
 
 def quat_to_euler(quat):
     """
-    将四元数(w, x, y, z)转换为与 matrix_to_euler 一致的 ZYX 欧拉角 (返回顺序: roll, pitch, yaw) ，单位：度
+    将四元数 
+    # (w, x, y, z)
+    转换为与 matrix_to_euler 一致的 ZYX 欧拉角 (返回顺序: roll, pitch, yaw) ，单位：度
     与 matrix_to_euler 保持同一分解
     ## R = Rz * Ry * Rx
     """
