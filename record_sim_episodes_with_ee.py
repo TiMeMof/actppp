@@ -75,6 +75,8 @@ def main(args):
             print(f"{episode_idx=} Failed")
 
         joint_traj = [ts.observation['qpos'] for ts in episode]
+        ee_traj_left = [ts.observation['mocap_pose_left'] for ts in episode]
+        ee_traj_right = [ts.observation['mocap_pose_right'] for ts in episode]
         # replace gripper pose with gripper control
         gripper_ctrl_traj = [ts.observation['gripper_ctrl'] for ts in episode]
         for joint, ctrl in zip(joint_traj, gripper_ctrl_traj):
@@ -135,6 +137,9 @@ def main(args):
         data_dict = {
             '/observations/qpos': [],
             '/observations/qvel': [],
+            '/observations/ee': [],
+            '/action_ee_left': [],
+            '/action_ee_right': [],
             '/action': [],
         }
         for cam_name in camera_names:
@@ -142,6 +147,13 @@ def main(args):
 
         # because the replaying, there will be eps_len + 1 actions and eps_len + 2 timesteps
         # truncate here to be consistent
+        # 在示教完后立即处理
+        # 当前 ee_traj_left/right 长度 = L (包含初始 reset 后第0步执行完的pose到最后)
+        # joint_traj 长度 = L  (初始 + 每步后的 qpos)
+        # 你计划保留的 joint actions = joint_traj[:-1]  (长度 L-1)
+        # 期望匹配的 ee 命令 = ee_traj_left[:-1]  (长度 L-1)  -> 把“执行完第 t-1 步后”当成“第 t 步命令的目标pose”
+        ee_traj_left_cmd = ee_traj_left[:-1]
+        ee_traj_right_cmd = ee_traj_right[:-1]
         joint_traj = joint_traj[:-1]
         episode_replay = episode_replay[:-1]
 
@@ -153,6 +165,9 @@ def main(args):
             ts = episode_replay.pop(0)
             data_dict['/observations/qpos'].append(ts.observation['qpos'])
             data_dict['/observations/qvel'].append(ts.observation['qvel'])
+            data_dict['/observations/ee'].append(ts.observation['ee'])
+            data_dict['/action_ee_left'].append(ee_traj_left_cmd.pop(0))
+            data_dict['/action_ee_right'].append(ee_traj_right_cmd.pop(0))
             data_dict['/action'].append(action)
             for cam_name in camera_names:
                 data_dict[f'/observations/images/{cam_name}'].append(ts.observation['images'][cam_name])
@@ -171,6 +186,9 @@ def main(args):
             # compression=32001, compression_opts=(0, 0, 0, 0, 9, 1, 1), shuffle=False)
             qpos = obs.create_dataset('qpos', (max_timesteps, 14))
             qvel = obs.create_dataset('qvel', (max_timesteps, 14))
+            ee = obs.create_dataset('ee', (max_timesteps, 16))
+            ee_left = root.create_dataset('action_ee_left', (max_timesteps, 7))
+            ee_right = root.create_dataset('action_ee_right', (max_timesteps, 7))
             action = root.create_dataset('action', (max_timesteps, 14))
 
             for name, array in data_dict.items():

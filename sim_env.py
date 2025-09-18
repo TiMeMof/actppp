@@ -3,7 +3,7 @@ import os
 import collections
 import matplotlib.pyplot as plt
 import mujoco as mj
-from arm_FK import matrix_to_euler
+from arm_FK import matrix_to_euler, quat_to_euler
 from dm_control import mujoco
 from dm_control.rl import control
 from dm_control.suite import base
@@ -208,9 +208,13 @@ class BimanualViperXTask(base.Task):
         obs['qvel'] = self.get_qvel(physics)
         obs['env_state'] = self.get_env_state(physics)
         left_ee_pos, left_ee_euler,left_ee_quat,right_ee_pos,right_ee_euler,right_ee_quat = self.get_ee_pose(physics)
-        # 3 + 4 + 3 + 4
-        obs['ee'] = np.concatenate([left_ee_pos,left_ee_quat,right_ee_pos,right_ee_quat])
-        print(f"====={right_ee_euler}=====")
+        # 3 + 4 + 1 + 3 + 4 + 1 = 16
+        # print(obs['qpos'][6], obs['qpos'][13])
+        obs['ee'] = np.concatenate([left_ee_pos,left_ee_quat,[obs['qpos'][6]],right_ee_pos,right_ee_quat, [obs['qpos'][13]]])
+        print(f"ee: {[f'{x:.4f}' for x in obs['ee']]}")
+        # print(f"====={right_ee_euler}=====")
+        # right_rot = quat_to_euler(right_ee_quat)
+        # print("rot:", right_rot)
         obs['images'] = dict()
         obs['images']['top'] = physics.render(height=480, width=640, camera_id='top')
         obs['images']['left_wrist'] = physics.render(height=480, width=640, camera_id='left_wrist')

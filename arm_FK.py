@@ -88,8 +88,15 @@ def left_arm_fk(left_arm_qpos):
     return T
 
 def matrix_to_euler(mat):
-    # 标准 ZYX 欧拉角（yaw, pitch, roll）提取公式
-    # R = Rz*Ry*Rx
+    """
+    标准 ZYX 欧拉角（yaw, pitch, roll）提取公式
+    输入：mat为3x3旋转矩阵展开成的长度为9的一维数组，要flatten后传入
+    输出：返回顺序为 (roll, pitch, yaw)，单位：度
+    ## R = Rz * Ry * Rx
+    """
+    # 检测mat是否为3x3：
+    assert len(mat) == 9
+
     roll = np.arctan2(mat[7], mat[8])
     pitch = np.arctan2(-mat[6], np.sqrt(mat[7]**2 + mat[8]**2))
     yaw = np.arctan2(mat[3], mat[0])
@@ -98,10 +105,12 @@ def matrix_to_euler(mat):
     pitch = np.degrees(pitch)
     roll = np.degrees(roll)
     return [roll, pitch, yaw]
+
 def quat_to_euler(quat):
     """
     将四元数(w, x, y, z)转换为与 matrix_to_euler 一致的 ZYX 欧拉角 (返回顺序: roll, pitch, yaw) ，单位：度
-    与 matrix_to_euler 保持同一分解：R = Rz * Ry * Rx
+    与 matrix_to_euler 保持同一分解
+    ## R = Rz * Ry * Rx
     """
     quat = np.asarray(quat, dtype=float)
     if quat.shape[-1] != 4:
@@ -126,3 +135,17 @@ def quat_to_euler(quat):
     yaw = np.arctan2(R[1,0], R[0,0])
 
     return [np.degrees(roll), np.degrees(pitch), np.degrees(yaw)]
+
+
+if __name__ == "__main__":
+    # 测试
+    left_arm_qpos = [0, -0.96, 1.16, 0, -0.3, 0]
+    right_arm_qpos = [0, -0.96, 1.16, 0, -0.3, 0]
+    T_left = left_arm_fk(left_arm_qpos)
+    T_right = right_arm_fk(right_arm_qpos)
+    print("左臂末端位姿：\n", T_left)
+    print("右臂末端位姿：\n", T_right)
+    print("左臂末端欧拉角：\n", matrix_to_euler(T_left[:3,:3].flatten()))
+    print("右臂末端欧拉角：\n", matrix_to_euler(T_right[:3,:3].flatten()))
+    print("左臂末端欧拉角（四元数转）:\n", quat_to_euler([0.99875, 0, -0.04998, 0]))
+    print("右臂末端欧拉角（四元数转）:\n", quat_to_euler([0, 0.04998, 0, 0.99875]))

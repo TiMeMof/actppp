@@ -376,20 +376,19 @@ def eval_bc(config, ckpt_name, save_episode=True, num_rollouts=50):
                 ### process previous timestep to get qpos and image_list
                 time2 = time.time()
                 obs = ts.observation
-                print(len(ts.observation['qpos']), ts.observation['qpos'])
+                # print(len(ts.observation['qpos']), ts.observation['qpos'])
                 if 'images' in obs:
                     image_list.append(obs['images'])
                 else:
                     image_list.append({'main': obs['image']})
                 qpos_numpy = np.array(obs['qpos'])
                 ee = np.array(obs['ee'])
-                # print("=====left pos:" ,ee[:3])
-                left_quat = ee[3:7]
-                left_rot = arm_FK.quat_to_euler(left_quat)
-                right_quat = ee[10:14]
-                right_rot = arm_FK.quat_to_euler(right_quat)
-                print("rot:", right_rot)
-                # print("=====right pos:" ,ee[7:10])
+                # print("=====left pos:" ,qpos_numpy[0:7])
+                # left_eular_with_joint  = arm_FK.matrix_to_euler((arm_FK.left_arm_fk(qpos_numpy[0:6])[:3,:3]).flatten())
+                # left_quat = ee[3:7]
+                # left_rot = arm_FK.quat_to_euler(left_quat)
+                # print("left arm end eular angle:", left_eular_with_joint, left_rot)
+
                 qpos_history_raw[t] = qpos_numpy
                 qpos = pre_process(qpos_numpy)
                 qpos = torch.from_numpy(qpos).float().cuda().unsqueeze(0)
