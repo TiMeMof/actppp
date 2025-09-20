@@ -301,9 +301,9 @@ def build_encoder(args):
 
 def build_vae(args):
 
-    state_dim = args.action_dim
-    # print("-----------------------------state_dim:::::", state_dim)
-    state_dim = 14 # TODO hardcode
+    state_dim = args.state_dim
+    print("-----------------------------state_dim:::::", state_dim)
+    # state_dim = 14 # TODO hardcode
 
     # From state
     # backbone = None # from state for now, no need for conv nets

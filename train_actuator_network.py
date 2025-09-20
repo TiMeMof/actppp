@@ -66,6 +66,7 @@ def main():
     #         norm_stats = pickle.load(f)
     #     print('Loaded pretrain dataset stats')
     norm_stats, all_episode_len = get_norm_stats(dataset_path_list)
+    # norm_stats, all_episode_len = get_ee_norm_stats(dataset_path_list)
     train_episode_len = [all_episode_len[i] for i in train_episode_ids]
     val_episode_len = [all_episode_len[i] for i in val_episode_ids]
     assert(all_episode_len[0] % prediction_len == 0)

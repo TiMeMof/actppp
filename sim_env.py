@@ -211,7 +211,7 @@ class BimanualViperXTask(base.Task):
         # 3 + 4 + 1 + 3 + 4 + 1 = 16
         # print(obs['qpos'][6], obs['qpos'][13])
         obs['ee'] = np.concatenate([left_ee_pos,left_ee_quat,[obs['qpos'][6]],right_ee_pos,right_ee_quat, [obs['qpos'][13]]])
-        print(f"ee: {[f'{x:.4f}' for x in obs['ee']]}")
+        # print(f"ee: {[f'{x:.4f}' for x in obs['ee']]}")
         # print(f"====={right_ee_euler}=====")
         # right_rot = quat_to_euler(right_ee_quat)
         # print("rot:", right_rot)

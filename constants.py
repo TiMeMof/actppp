@@ -5,6 +5,12 @@ import os
 # DATA_DIR = '/home/zfu/interbotix_ws/src/act/data' if os.getlogin() == 'zfu' else '/scr/tonyzhao/datasets'
 DATA_DIR = '/home/moyufan/actppp/data'
 SIM_TASK_CONFIGS = {
+    'sim_transfer_cube_ee':{
+        'dataset_dir': DATA_DIR + '/sim_transfer_cube_ee',
+        'num_episodes': 50,
+        'episode_len': 400,
+        'camera_names': ['top', 'left_wrist', 'right_wrist']
+    },
     'sim_transfer_cube_scripted':{
         'dataset_dir': DATA_DIR + '/sim_transfer_cube_scripted',
         'num_episodes': 50,

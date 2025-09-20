@@ -1,0 +1,94 @@
+{
+    // 使用 IntelliSense 了解相关属性。 
+    // 悬停以查看现有属性的描述。
+    // 欲了解更多信息，请访问: https://go.microsoft.com/fwlink/?linkid=830387
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "record_sim_episodes_with_ee",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/record_sim_episodes_with_ee.py",
+            "console": "integratedTerminal",
+            "env": {
+                "MUJOCO_GL": "egl" // 添加环境变量
+            },
+            "args": [
+                "--task_name",
+                "sim_transfer_cube_scripted",
+                "--dataset_dir",
+                "data/sim_transfer_cube_ee",
+                "--num_episodes",
+                "50"
+            ]
+        },
+        {
+            "name": "train---imitate_episodes",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/imitate_episodes.py",
+            "console": "integratedTerminal",
+            "env": {
+                "MUJOCO_GL": "egl" // 添加环境变量
+            },
+            "args": [
+                "--task_name",
+                "sim_transfer_cube_scripted",
+                "--ckpt_dir",
+                "ckpt/act2",
+                "--policy_class",
+                "ACT",
+                "--kl_weight",
+                "10",
+                "--chunk_size",
+                "100",
+                "--hidden_dim",
+                "512",
+                "--batch_size",
+                "8",
+                "--dim_feedforward",
+                "3200",
+                "--num_steps",
+                "1000",
+                "--lr",
+                "1e-5",
+                "--seed",
+                "0"
+            ]
+        },
+        {
+            "name": "train ee---imitate_episodes",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/imitate_episodes.py",
+            "console": "integratedTerminal",
+            "env": {
+                "MUJOCO_GL": "egl" // 添加环境变量
+            },
+            "args": [
+                "--task_name",
+                "sim_transfer_cube_ee",
+                "--ckpt_dir",
+                "ckpt/act2",
+                "--policy_class",
+                "ACT",
+                "--kl_weight",
+                "10",
+                "--chunk_size",
+                "100",
+                "--hidden_dim",
+                "512",
+                "--batch_size",
+                "8",
+                "--dim_feedforward",
+                "3200",
+                "--num_steps",
+                "20",
+                "--lr",
+                "1e-5",
+                "--seed",
+                "0"
+            ]
+        }
+    ]
+}
