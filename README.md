@@ -25,8 +25,8 @@ You can find all scripted/human demo for simulated environments [here](https://d
 
 ### Installation
 
-    conda create -n aloha python=3.8.10
-    conda activate aloha
+    conda create -n actppp python=3.8.10
+    conda activate actppp
     pip install -r requirement.txt
     cd detr && pip install -e .
     cd ..
