@@ -71,7 +71,12 @@ def main(args):
     name_filter = task_config.get('name_filter', lambda n: True)
 
     # fixed parameters
-    state_dim = 16
+    use_ee = True
+
+    if use_ee:
+        state_dim = 16
+    else:
+        state_dim = 14
     action_dim = state_dim + 2 # 多两个维度填充
     lr_backbone = 1e-5
     backbone = 'resnet18'
@@ -95,6 +100,7 @@ def main(args):
                          'vq_dim': args['vq_dim'],
                          'action_dim': action_dim,
                          'state_dim': state_dim,
+                         'use_ee': use_ee,
                          'no_encoder': args['no_encoder'],
                          }
     elif policy_class == 'Diffusion':
@@ -125,6 +131,7 @@ def main(args):
     }
 
     config = {
+        'use_ee': use_ee,
         'num_steps': num_steps,
         'eval_every': eval_every,
         'validate_every': validate_every,
@@ -168,7 +175,7 @@ def main(args):
         print()
         exit()
 
-    train_dataloader, val_dataloader, stats, _ = load_data(dataset_dir, name_filter, camera_names, batch_size_train, batch_size_val, args['chunk_size'], args['skip_mirrored_data'], config['load_pretrain'], policy_class, stats_dir_l=stats_dir, sample_weights=sample_weights, train_ratio=train_ratio)
+    train_dataloader, val_dataloader, stats, _ = load_data(config['use_ee'], dataset_dir, name_filter, camera_names, batch_size_train, batch_size_val, args['chunk_size'], args['skip_mirrored_data'], config['load_pretrain'], policy_class, stats_dir_l=stats_dir, sample_weights=sample_weights, train_ratio=train_ratio)
 
     # save dataset stats
     stats_path = os.path.join(ckpt_dir, f'dataset_stats.pkl')
@@ -349,7 +356,7 @@ def eval_bc(config, ckpt_name, save_episode=True, num_rollouts=50):
             all_time_actions = torch.zeros([max_timesteps, max_timesteps+num_queries, 16]).cuda()
 
         # qpos_history = torch.zeros((1, max_timesteps, state_dim)).cuda()
-        eepos_history_raw = np.zeros((max_timesteps, state_dim))
+        qpos_history_raw = np.zeros((max_timesteps, state_dim))
         image_list = [] # for visualization
         qpos_list = []
         target_qpos_list = []
@@ -385,12 +392,18 @@ def eval_bc(config, ckpt_name, save_episode=True, num_rollouts=50):
                     image_list.append(obs['images'])
                 else:
                     image_list.append({'main': obs['image']})
-                # qpos_numpy = np.array(obs['qpos'])
+                qpos_numpy = np.array(obs['qpos'])
                 ee = np.array(obs['ee'])
 
-
-                eepos_history_raw[t] = ee
-                qpos = pre_process(ee)
+                if config['use_ee']:
+                    # 如果用的是ee策略，之后一直到问询policy的地方，qpos其实都是ee的替换
+                    qpos_history_raw[t] = ee
+                    # qpos = ee
+                    qpos = pre_process(ee)
+                    # qpos = pre_process(qpos_numpy) 
+                else:
+                    qpos_history_raw[t] = qpos_numpy
+                    qpos = pre_process(qpos_numpy) 
                 qpos = torch.from_numpy(qpos).float().cuda().unsqueeze(0)
                 # qpos_history[:, t] = qpos
                 if t % query_frequency == 0:
@@ -405,6 +418,7 @@ def eval_bc(config, ckpt_name, save_episode=True, num_rollouts=50):
                     time1 = time.time()
 
                 ### query policy
+                # 问询策略
                 time3 = time.time()
                 if config['policy_class'] == "ACT":
                     if t % query_frequency == 0:
@@ -423,6 +437,7 @@ def eval_bc(config, ckpt_name, save_episode=True, num_rollouts=50):
                         if real_robot:
                             all_actions = torch.cat([all_actions[:, :-BASE_DELAY, :-2], all_actions[:, BASE_DELAY:, -2:]], dim=2)
                     if temporal_agg:
+                        # 相当于要做指数加权
                         all_time_actions[[t], t:t+num_queries] = all_actions
                         actions_for_curr_step = all_time_actions[:, t]
                         actions_populated = torch.all(actions_for_curr_step != 0, axis=1)
@@ -455,28 +470,36 @@ def eval_bc(config, ckpt_name, save_episode=True, num_rollouts=50):
                 # print('query policy: ', time.time() - time3)
 
                 ### post-process actions
+                # 后处理动作
                 time4 = time.time()
                 raw_action = raw_action.squeeze(0).cpu().numpy()
                 action = post_process(raw_action)
                 target_qpos = action[:-2]
-
-                # if use_actuator_net:
-                #     assert(not temporal_agg)
-                #     if t % prediction_len == 0:
-                #         offset_start_ts = t + history_len
-                #         actuator_net_in = np.array(norm_episode_all_base_actions[offset_start_ts - history_len: offset_start_ts + future_len])
-                #         actuator_net_in = torch.from_numpy(actuator_net_in).float().unsqueeze(dim=0).cuda()
-                #         pred = actuator_network(actuator_net_in)
-                #         base_action_chunk = actuator_unnorm(pred.detach().cpu().numpy()[0])
-                #     base_action = base_action_chunk[t % prediction_len]
-                # else:
+                if config['use_ee']:
+                    chuyi = 1
+                    left_pose = target_qpos[:7]/chuyi
+                    left_gripper = target_qpos[7]
+                    target_qpos_left = arm_FK.arm_ik(env._physics, target_pos=left_pose[:3], target_quat=[0.99875, 0, -0.04998, 0], arm='left')
+                    right_pose = target_qpos[8:15]/chuyi
+                    right_gripper = target_qpos[15]
+                    target_qpos_right = arm_FK.arm_ik(env._physics, target_pos=right_pose[:3], target_quat=[0, 0.04998, 0, 0.99875], arm='right')
+                    target_qpos = np.concatenate([target_qpos_left, [left_gripper], target_qpos_right, [right_gripper]])
+                else:
+                    tp = target_qpos.copy()
+                    left_gripper = tp[6]
+                    right_gripper = tp[13]
+                    lfee = arm_FK.left_arm_fk(tp[:6])
+                    riee = arm_FK.right_arm_fk(tp[7:13])
+                    target_qpos_left = arm_FK.arm_ik(env._physics,qpos_numpy, target_pos=lfee[:3, 3], target_quat=arm_FK.mat2quat(lfee[:3, :3]), arm='left')
+                    target_qpos_right = arm_FK.arm_ik(env._physics,qpos_numpy, target_pos=riee[:3, 3], target_quat=arm_FK.mat2quat(riee[:3, :3]), arm='right')
+                    tp = np.concatenate([target_qpos_left, [left_gripper], target_qpos_right, [right_gripper]])
+                    print(f"difference between ik and fk: {sum(np.round((tp - target_qpos), 3))}")
+                    # target_qpos = tp.copy()
                 base_action = action[-2:]
-                # base_action = calibrate_linear_vel(base_action, c=0.19)
-                # base_action = postprocess_base_action(base_action)
-                # print('post process: ', time.time() - time4)
 
                 ### step the environment
                 time5 = time.time()
+                # print("target_qpos: ", np.round(target_qpos, 3))
                 if real_robot:
                     ts = env.step(target_qpos, base_action)
                 else:
@@ -504,12 +527,12 @@ def eval_bc(config, ckpt_name, save_episode=True, num_rollouts=50):
             move_grippers([env.puppet_bot_left, env.puppet_bot_right], [PUPPET_GRIPPER_JOINT_OPEN] * 2, move_time=0.5)  # open
             # save qpos_history_raw
             log_id = get_auto_index(ckpt_dir)
-            np.save(os.path.join(ckpt_dir, f'qpos_{log_id}.npy'), eepos_history_raw)
+            np.save(os.path.join(ckpt_dir, f'qpos_{log_id}.npy'), qpos_history_raw)
             plt.figure(figsize=(10, 20))
             # plot qpos_history_raw for each qpos dim using subplots
             for i in range(state_dim):
                 plt.subplot(state_dim, 1, i+1)
-                plt.plot(eepos_history_raw[:, i])
+                plt.plot(qpos_history_raw[:, i])
                 # remove x axis
                 if i != state_dim - 1:
                     plt.xticks([])
