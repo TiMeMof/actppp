@@ -23,7 +23,7 @@
             ]
         },
         {
-            "name": "train---imitate_episodes",
+            "name": "eval ee---imitate_episodes",
             "type": "debugpy",
             "request": "launch",
             "program": "${workspaceFolder}/imitate_episodes.py",
@@ -32,8 +32,9 @@
                 "MUJOCO_GL": "egl" // 添加环境变量
             },
             "args": [
+                "--eval",
                 "--task_name",
-                "sim_transfer_cube_scripted",
+                "sim_transfer_cube_ee",
                 "--ckpt_dir",
                 "ckpt/act2",
                 "--policy_class",

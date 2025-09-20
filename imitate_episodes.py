@@ -72,6 +72,7 @@ def main(args):
 
     # fixed parameters
     state_dim = 16
+    action_dim = state_dim + 2 # 多两个维度填充
     lr_backbone = 1e-5
     backbone = 'resnet18'
     if policy_class == 'ACT':
@@ -92,7 +93,7 @@ def main(args):
                          'vq': args['use_vq'],
                          'vq_class': args['vq_class'],
                          'vq_dim': args['vq_dim'],
-                         'action_dim': 18,
+                         'action_dim': action_dim,
                          'state_dim': state_dim,
                          'no_encoder': args['no_encoder'],
                          }
@@ -100,7 +101,7 @@ def main(args):
 
         policy_config = {'lr': args['lr'],
                          'camera_names': camera_names,
-                         'action_dim': 16,
+                         'action_dim': action_dim,
                          'state_dim': state_dim,
                          'observation_horizon': 1,
                          'action_horizon': 8,
@@ -348,7 +349,7 @@ def eval_bc(config, ckpt_name, save_episode=True, num_rollouts=50):
             all_time_actions = torch.zeros([max_timesteps, max_timesteps+num_queries, 16]).cuda()
 
         # qpos_history = torch.zeros((1, max_timesteps, state_dim)).cuda()
-        qpos_history_raw = np.zeros((max_timesteps, state_dim))
+        eepos_history_raw = np.zeros((max_timesteps, state_dim))
         image_list = [] # for visualization
         qpos_list = []
         target_qpos_list = []
@@ -384,16 +385,12 @@ def eval_bc(config, ckpt_name, save_episode=True, num_rollouts=50):
                     image_list.append(obs['images'])
                 else:
                     image_list.append({'main': obs['image']})
-                qpos_numpy = np.array(obs['qpos'])
+                # qpos_numpy = np.array(obs['qpos'])
                 ee = np.array(obs['ee'])
-                # print("=====left pos:" ,qpos_numpy[0:7])
-                # left_eular_with_joint  = arm_FK.matrix_to_euler((arm_FK.left_arm_fk(qpos_numpy[0:6])[:3,:3]).flatten())
-                # left_quat = ee[3:7]
-                # left_rot = arm_FK.quat_to_euler(left_quat)
-                # print("left arm end eular angle:", left_eular_with_joint, left_rot)
 
-                qpos_history_raw[t] = qpos_numpy
-                qpos = pre_process(qpos_numpy)
+
+                eepos_history_raw[t] = ee
+                qpos = pre_process(ee)
                 qpos = torch.from_numpy(qpos).float().cuda().unsqueeze(0)
                 # qpos_history[:, t] = qpos
                 if t % query_frequency == 0:
@@ -487,7 +484,7 @@ def eval_bc(config, ckpt_name, save_episode=True, num_rollouts=50):
                 # print('step env: ', time.time() - time5)
 
                 ### for visualization
-                qpos_list.append(qpos_numpy)
+                qpos_list.append(ee)
                 target_qpos_list.append(target_qpos)
                 rewards.append(ts.reward)
                 duration = time.time() - time1
@@ -507,12 +504,12 @@ def eval_bc(config, ckpt_name, save_episode=True, num_rollouts=50):
             move_grippers([env.puppet_bot_left, env.puppet_bot_right], [PUPPET_GRIPPER_JOINT_OPEN] * 2, move_time=0.5)  # open
             # save qpos_history_raw
             log_id = get_auto_index(ckpt_dir)
-            np.save(os.path.join(ckpt_dir, f'qpos_{log_id}.npy'), qpos_history_raw)
+            np.save(os.path.join(ckpt_dir, f'qpos_{log_id}.npy'), eepos_history_raw)
             plt.figure(figsize=(10, 20))
             # plot qpos_history_raw for each qpos dim using subplots
             for i in range(state_dim):
                 plt.subplot(state_dim, 1, i+1)
-                plt.plot(qpos_history_raw[:, i])
+                plt.plot(eepos_history_raw[:, i])
                 # remove x axis
                 if i != state_dim - 1:
                     plt.xticks([])
