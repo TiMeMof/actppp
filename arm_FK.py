@@ -129,121 +129,194 @@ def mat2quat(Rm):
     # reorder to w,x,y,z
     return np.array([q[3], q[0], q[1], q[2]])
 
-def arm_ik(physics:mujoco.Physics, qpos_init, target_pos, target_quat, arm='right'):
-    """
-    逆运动学求解
-    输入：physics, 目标末端位置 target_pos (3,), 目标末端姿态 target_quat (4,), arm ('left' or 'right')
-    输出：返回求解的左右臂关节角
+def arm_ik(physics:mujoco.Physics, qpos_init, target_pos, target_quat, arm='right',
+           max_iters=150, tol_pos=1e-4, tol_ori=2e-3, verbose=False,
+           position_weight=1.0, orientation_weight=0.3, restarts=2):
+    """改进版数值IK（阻尼LM + 关节限幅 + 多重启动）
+
+    参数:
+        physics: dm_control.mujoco.Physics 实例（用于获取当前关节角初值）
+        qpos_init: 当前完整 qpos (或 None). 若提供长度>=14 的 array, 将使用其对应手臂部分作为初值.
+        target_pos: (3,) 目标位置
+        target_quat: (4,) 目标方向四元数 (w,x,y,z)
+        arm: 'left' or 'right'
+        max_iters: 单次迭代最大步数
+        tol_pos, tol_ori: 位置/方向收敛阈值 (m, rad)
+        position_weight, orientation_weight: 误差加权 (提高位置优先级)
+        restarts: 失败时随机扰动重启次数（总共尝试 restarts+1 次）
+
+    返回:
+        长度6 的目标关节角 numpy.ndarray
     """
     assert len(target_pos) == 3 and len(target_quat) == 4
-    # 获取初始关节角
-    qpos_init = get_qpos(physics)
-    # 设置末端目标位置和姿态
-    # 说明：为避免依赖外部模型加载（pinocchio 可能不可用或未配置），
-    # 这里使用数值雅可比 + 阻尼最小二乘（DLS）对手臂进行迭代求解。
-    # qpos_init 格式: [left_arm(6), left_gripper(1), right_arm(6), right_gripper(1)]
-    # 本函数将默认求解右臂（如果目标在右侧）或左臂，依据 target_pos 的 x 值简单判断；
-    # 返回值为长度6的关节角数组（单臂）。
+    target_pos = np.asarray(target_pos, dtype=float)
+    tq = np.asarray(target_quat, dtype=float)
+    tq = tq / np.linalg.norm(tq)
 
-    def fk_arm(arm, q):
-        # 返回 4x4 末端变换矩阵
-        if arm == 'left':
-            return left_arm_fk(q)
-        return right_arm_fk(q)
+    # 从 physics 获取当前 qpos (格式: [left6, left_grip, right6, right_grip])
+    full_qpos = get_qpos(physics) if qpos_init is None else np.asarray(qpos_init).copy()
+    if arm == 'right':
+        # 注意原 get_qpos 排布: left(6) + left_grip + right(6) + right_grip
+        q_current = full_qpos[7:13].copy()
+        # 关节限位 (来自 vx300s xml, 这里直接硬编码; 若与真实差异可放 constants)
+        joint_limits = np.array([
+            [-np.pi, np.pi],          # waist
+            [-1.85005, 1.25664],      # shoulder
+            [-1.76278, 1.6057],       # elbow
+            [-np.pi, np.pi],          # forearm_roll
+            [-1.8675, 2.23402],       # wrist_angle
+            [-np.pi, np.pi],          # wrist_rotate
+        ])
+    else:
+        q_current = full_qpos[0:6].copy()
+        joint_limits = np.array([
+            [-np.pi, np.pi],
+            [-1.85005, 1.25664],
+            [-1.76278, 1.6057],
+            [-np.pi, np.pi],
+            [-1.8675, 2.23402],
+            [-np.pi, np.pi],
+        ])
 
-    def pose_error(current_T, target_p, target_q):
-        # 位置误差
-        p_cur = current_T[:3,3]
-        dp = target_p - p_cur
-        # 方向误差：使用四元数差转向量（小角近似）
-        # 将 current_T 的旋转转为 quaternion
-        R = current_T[:3,:3]
-        # R to quaternion (w,x,y,z)
-        q_cur = mat2quat(R)
-        # ensure normalized
-        q_cur = q_cur / np.linalg.norm(q_cur)
-        tq = np.asarray(target_q, dtype=float)
-        tq = tq / np.linalg.norm(tq)
-        # quaternion error vector (using small-angle approx):  e =  q_target * q_cur^{-1}
-        # q_inv of cur is [w, -x, -y, -z]
-        qc_inv = np.array([q_cur[0], -q_cur[1], -q_cur[2], -q_cur[3]])
-        # quaternion multiplication: q_err = tq * qc_inv
-        w1,x1,y1,z1 = tq
-        w2,x2,y2,z2 = qc_inv
-        q_err = np.array([
+    def clamp(q):
+        return np.clip(q, joint_limits[:,0], joint_limits[:,1])
+
+    def fk(q):
+        return left_arm_fk(q) if arm == 'left' else right_arm_fk(q)
+
+    def quat_mul(q1, q2):
+        w1,x1,y1,z1 = q1
+        w2,x2,y2,z2 = q2
+        return np.array([
             w1*w2 - x1*x2 - y1*y2 - z1*z2,
             w1*x2 + x1*w2 + y1*z2 - z1*y2,
             w1*y2 - x1*z2 + y1*w2 + z1*x2,
             w1*z2 + x1*y2 - y1*x2 + z1*w2
         ])
-        # small angle approx: rotation vector ~ 2 * imag(q_err)
-        dre = 2.0 * q_err[1:]
-        # compose 6D error
-        err6 = np.concatenate([dp, dre])
-        return err6
 
-    def numeric_jacobian(arm, q, eps=1e-6):
-        """
-        计算出关节空间到任务空间的数值雅可比矩阵
-        J: 6 x n"""
-        nq = len(q)
-        J = np.zeros((6, nq))
-        T0 = fk_arm(arm, q)
-        for i in range(nq):
-            dq = np.zeros_like(q)
-            dq[i] = eps
-            T1 = fk_arm(arm, q + dq)
-            # position difference
-            dp = (T1[:3,3] - T0[:3,3]) / eps
-            # rotation difference -> using quaternion small-angle
-            def Rmat_to_rotvec(Ra, Rb):
-                # compute relative rotation R_rel = Ra.T @ Rb
-                Rrel = Ra.T @ Rb
-                # angle-axis from rotation matrix
-                angle = np.arccos(np.clip((np.trace(Rrel)-1)/2, -1, 1))
-                if np.isclose(angle, 0):
-                    return np.zeros(3)
-                rx = (Rrel[2,1] - Rrel[1,2])/(2*np.sin(angle))
-                ry = (Rrel[0,2] - Rrel[2,0])/(2*np.sin(angle))
-                rz = (Rrel[1,0] - Rrel[0,1])/(2*np.sin(angle))
-                return angle * np.array([rx, ry, rz]) / eps
-            dre = Rmat_to_rotvec(T0[:3,:3], T1[:3,:3])
-            J[:3,i] = dp
-            J[3:,i] = dre
+    def orientation_error(R_current, tq):
+        # 当前旋转矩阵 -> 四元数
+        qc = mat2quat(R_current)
+        qc = qc / np.linalg.norm(qc)
+        # 计算相对四元数: q_rel = tq * qc^{-1}
+        qc_inv = np.array([qc[0], -qc[1], -qc[2], -qc[3]])
+        q_rel = quat_mul(tq, qc_inv)
+        if q_rel[0] < 0:  # 选择最短旋转
+            q_rel = -q_rel
+        # 将相对四元数转换为旋转向量: angle = 2*acos(w), axis = v/|v|
+        w = np.clip(q_rel[0], -1.0, 1.0)
+        angle = 2*np.arccos(w)
+        s = np.sqrt(1 - w*w)
+        if s < 1e-8:
+            axis = q_rel[1:]
+        else:
+            axis = q_rel[1:] / s
+        rotvec = angle * axis  # 这就是方向误差 (轴角)
+        return rotvec
+
+    def pose_error(q):
+        T = fk(q)
+        dp = target_pos - T[:3,3]
+        drot = orientation_error(T[:3,:3], tq)
+        # 加权 6D 误差
+        return np.concatenate([position_weight*dp, orientation_weight*drot])
+
+    def numerical_jacobian(q, eps=1e-5):
+        n = len(q)
+        J = np.zeros((6, n))
+        e0_T = fk(q)
+        p0 = e0_T[:3,3]
+        R0 = e0_T[:3,:3]
+        for i in range(n):
+            dq = np.zeros(n); dq[i] = eps
+            T1 = fk(q + dq)
+            p1 = T1[:3,3]
+            R1 = T1[:3,:3]
+            # 位置偏导
+            J[:3,i] = (p1 - p0)/eps
+            # 方向偏导: 近似 (orientation_error(R1) - orientation_error(R0))/eps
+            # 但 orientation_error 需要与目标相比; 使用 log(R0^T R1)/eps 简化
+            Rrel = R0.T @ R1
+            tr = np.clip((np.trace(Rrel)-1)/2, -1, 1)
+            ang = np.arccos(tr)
+            if ang < 1e-9:
+                rvec = np.zeros(3)
+            else:
+                rv = np.array([
+                    Rrel[2,1]-Rrel[1,2],
+                    Rrel[0,2]-Rrel[2,0],
+                    Rrel[1,0]-Rrel[0,1]
+                ])/(2*np.sin(ang))
+                rvec = ang * rv
+            J[3:,i] = orientation_weight * rvec / eps
+        # 位置行乘以位置权重
+        J[:3,:] *= position_weight
         return J
 
-    if arm == 'right':
-        q = qpos_init[7:13]  # right_arm in qpos_init ordering
-    else:
-        q = qpos_init[0:6]
+    best_q = None
+    best_err = 1e4
 
-    # q = np.array(q0, dtype=float)
-    lam = 1e-2
-    max_iters = 100
-    tol_pos = 1e-4
-    tol_ori = 1e-3
-    for it in range(max_iters):
-        print(f"IK iter {it}, current q: {q}")
-        Tcur = fk_arm(arm, q)
-        err6 = pose_error(Tcur, np.asarray(target_pos, dtype=float), np.asarray(target_quat, dtype=float))
-        pos_err_norm = np.linalg.norm(err6[:3])
-        ori_err_norm = np.linalg.norm(err6[3:])
-        if pos_err_norm < tol_pos and ori_err_norm < tol_ori:
+    rng = np.random.default_rng()
+    initial_seeds = [q_current]
+    for _ in range(restarts):
+        noise = rng.normal(0, 0.05, size=6)
+        initial_seeds.append(clamp(q_current + noise))
+
+    for seed_id, q0 in enumerate(initial_seeds):
+        q = clamp(q0.copy())
+        lam = 1e-2   # 初始阻尼
+        prev_cost = None
+        for it in range(max_iters):
+            err = pose_error(q)
+            pos_err = np.linalg.norm(err[:3]) / max(position_weight, 1e-8)
+            ori_err = np.linalg.norm(err[3:]) / max(orientation_weight, 1e-8)
+            cost = 0.5 * (err @ err)
+            if verbose:
+                print(f"[IK {arm} seed{seed_id}] iter {it}: pos={pos_err:.4e}, ori={ori_err:.4e}, lam={lam:.2e}")
+            if pos_err < tol_pos and ori_err < tol_ori:
+                break
+            J = numerical_jacobian(q)
+            # LM: (J^T J + lambda I) dq = J^T err
+            JTJ = J.T @ J
+            g = J.T @ err
+            # 为避免数值问题，对角线加微小正则
+            H = JTJ + lam * np.eye(JTJ.shape[0])
+            try:
+                dq = np.linalg.solve(H, g)
+            except np.linalg.LinAlgError:
+                dq = np.linalg.pinv(H) @ g
+            # 步长限制，避免一次跳太大
+            max_step = 0.15  # rad
+            step_norm = np.linalg.norm(dq)
+            if step_norm > max_step:
+                dq = dq * (max_step / (step_norm + 1e-9))
+            q_trial = clamp(q + dq)
+            err_trial = pose_error(q_trial)
+            cost_trial = 0.5 * (err_trial @ err_trial)
+            # 自适应阻尼: 成功下降则减小 lambda, 否则增大并重试
+            if cost_trial < cost:
+                q = q_trial
+                prev_cost = cost_trial
+                lam = max(lam * 0.7, 1e-5)
+            else:
+                lam = min(lam * 2.5, 1e2)
+            # 若阻尼极大仍不下降，可提前终止本 seed
+            if lam >= 1e2 and (prev_cost is not None) and cost_trial >= prev_cost:
+                break
+        # 记录最好解
+        final_err = pose_error(q)
+        final_cost = 0.5 * (final_err @ final_err)
+        if final_cost < best_err:
+            best_err = final_cost
+            best_q = q
+        # 若已经很好就不再尝试更多种子
+        if (
+            np.linalg.norm(final_err[:3]) / max(position_weight,1e-8) < tol_pos and
+            np.linalg.norm(final_err[3:]) / max(orientation_weight,1e-8) < tol_ori
+        ):
             break
-        J = numeric_jacobian(arm, q)
-        # Damped least squares: dq = J.T * (J J.T + lambda^2 I)^-1 * err
-        JJt = J @ J.T
-        reg = lam * lam * np.eye(JJt.shape[0])
-        try:
-            inv = np.linalg.inv(JJt + reg)
-            dq = J.T @ (inv @ err6)
-        except np.linalg.LinAlgError:
-            dq = J.T @ np.linalg.pinv(JJt + reg) @ err6
-        # step size control
-        alpha = 0.5
-        q = q + alpha * dq
 
-    return q
+    return best_q if best_q is not None else q_current
 
 def matrix_to_euler(mat):
     """
@@ -335,3 +408,28 @@ if __name__ == "__main__":
     else:
         T_sol = left_arm_fk(sol)
     print(f'FK of IK solution pos: {T_sol[:3,3]}, target pos: {target_pos}')
+
+    # 新的更严格测试：扰动多个初值并统计误差
+    print("\n=== Enhanced IK convergence test ===")
+    rng = np.random.default_rng(42)
+    for test_arm, target_T in [('left', T_left), ('right', T_right)]:
+        target_pos = target_T[:3,3]
+        target_quat = mat2quat(target_T[:3,:3])
+        base_full_qpos = get_qpos(phys)
+        print(f"\nArm: {test_arm}")
+        for i in range(5):
+            # 构造扰动初值 (仅手臂)
+            if test_arm == 'left':
+                base_full_qpos[0:6] = np.array(left_arm_qpos) + rng.normal(0, 0.15, size=6)
+            else:
+                base_full_qpos[7:13] = np.array(right_arm_qpos) + rng.normal(0, 0.15, size=6)
+            sol = arm_ik(phys, base_full_qpos, target_pos, target_quat, arm=test_arm, verbose=False)
+            T_sol = left_arm_fk(sol) if test_arm=='left' else right_arm_fk(sol)
+            perr = np.linalg.norm(T_sol[:3,3]-target_pos)
+            # 方向误差角度
+            def rot_angle(Ra,Rb):
+                Rrel = Ra.T @ Rb
+                ang = np.arccos(np.clip((np.trace(Rrel)-1)/2, -1, 1))
+                return ang
+            oerr = rot_angle(T_sol[:3,:3], target_T[:3,:3])
+            print(f" seed {i}: pos_err={perr:.3e} m, ori_err={oerr:.3e} rad, q={np.round(sol,3)}")

@@ -51,6 +51,7 @@ def main(args):
     validate_every = args['validate_every']
     save_every = args['save_every']
     resume_ckpt_path = args['resume_ckpt_path']
+    use_ee = args['use_ee']
 
     # get task parameters
     is_sim = task_name[:4] == 'sim_'
@@ -70,8 +71,8 @@ def main(args):
     train_ratio = task_config.get('train_ratio', 0.99)
     name_filter = task_config.get('name_filter', lambda n: True)
 
-    # fixed parameters
-    use_ee = True
+    # # fixed parameters
+    # use_ee = True
 
     if use_ee:
         state_dim = 16
@@ -479,10 +480,10 @@ def eval_bc(config, ckpt_name, save_episode=True, num_rollouts=50):
                     chuyi = 1
                     left_pose = target_qpos[:7]/chuyi
                     left_gripper = target_qpos[7]
-                    target_qpos_left = arm_FK.arm_ik(env._physics, target_pos=left_pose[:3], target_quat=[0.99875, 0, -0.04998, 0], arm='left')
+                    target_qpos_left = arm_FK.arm_ik(env._physics, qpos_numpy, target_pos=left_pose[:3], target_quat=[0.99875, 0, -0.04998, 0], arm='left')
                     right_pose = target_qpos[8:15]/chuyi
                     right_gripper = target_qpos[15]
-                    target_qpos_right = arm_FK.arm_ik(env._physics, target_pos=right_pose[:3], target_quat=[0, 0.04998, 0, 0.99875], arm='right')
+                    target_qpos_right = arm_FK.arm_ik(env._physics, qpos_numpy, target_pos=right_pose[:3], target_quat=[0, 0.04998, 0, 0.99875], arm='right')
                     target_qpos = np.concatenate([target_qpos_left, [left_gripper], target_qpos_right, [right_gripper]])
                 else:
                     tp = target_qpos.copy()
@@ -494,6 +495,7 @@ def eval_bc(config, ckpt_name, save_episode=True, num_rollouts=50):
                     target_qpos_right = arm_FK.arm_ik(env._physics,qpos_numpy, target_pos=riee[:3, 3], target_quat=arm_FK.mat2quat(riee[:3, :3]), arm='right')
                     tp = np.concatenate([target_qpos_left, [left_gripper], target_qpos_right, [right_gripper]])
                     print(f"difference between ik and fk: {sum(np.round((tp - target_qpos), 3))}")
+                    # print(lfee[:3, 3],ee[:3])
                     # target_qpos = tp.copy()
                 base_action = action[-2:]
 
@@ -708,5 +710,6 @@ if __name__ == '__main__':
     parser.add_argument('--vq_class', action='store', type=int, help='vq_class')
     parser.add_argument('--vq_dim', action='store', type=int, help='vq_dim')
     parser.add_argument('--no_encoder', action='store_true')
+    parser.add_argument('--use_ee', action='store_true', help='use_ee')
     
     main(vars(parser.parse_args()))
