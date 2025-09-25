@@ -14,3 +14,4 @@ h5py
 ipython
 wandb
 diffusers
+pin==2.6.21

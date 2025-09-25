@@ -1,0 +1,18 @@
+# 初始关节角 (MuJoCo keyframe) 左臂与右臂
+vx300s_left_waist: 0.0
+vx300s_left_shoulder: -0.96
+vx300s_left_elbow: 1.16
+vx300s_left_forearm_roll: 0.0
+vx300s_left_wrist_angle: -0.3
+vx300s_left_wrist_rotate: 0.0
+vx300s_left_left_finger: 0.024
+vx300s_left_right_finger: -0.024
+
+vx300s_right_waist: 0.0
+vx300s_right_shoulder: -0.96
+vx300s_right_elbow: 1.16
+vx300s_right_forearm_roll: 0.0
+vx300s_right_wrist_angle: -0.3
+vx300s_right_wrist_rotate: 0.0
+vx300s_right_left_finger: 0.024
+vx300s_right_right_finger: -0.024

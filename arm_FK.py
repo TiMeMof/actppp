@@ -95,7 +95,58 @@ def left_arm_fk(left_arm_qpos):
     # =========================================================
     return T
 
-def get_qpos(physics):
+def matrix_to_euler(mat):
+    """
+    标准 ZYX 欧拉角（yaw, pitch, roll）提取公式
+    输入：mat为3x3旋转矩阵展开成的长度为9的一维数组，要flatten后传入
+    输出：返回顺序为 (roll, pitch, yaw)，单位：度
+    ## R = Rz * Ry * Rx
+    """
+    # 检测mat是否为3x3：
+    assert len(mat) == 9
+
+    roll = np.arctan2(mat[7], mat[8])
+    pitch = np.arctan2(-mat[6], np.sqrt(mat[7]**2 + mat[8]**2))
+    yaw = np.arctan2(mat[3], mat[0])
+
+    yaw = np.degrees(yaw)
+    pitch = np.degrees(pitch)
+    roll = np.degrees(roll)
+    return [roll, pitch, yaw]
+
+def quat_to_euler(quat):
+    """
+    将四元数 
+    # (w, x, y, z)
+    转换为与 matrix_to_euler 一致的 ZYX 欧拉角 (返回顺序: roll, pitch, yaw) ，单位：度
+    与 matrix_to_euler 保持同一分解
+    ## R = Rz * Ry * Rx
+    """
+    quat = np.asarray(quat, dtype=float)
+    if quat.shape[-1] != 4:
+        raise ValueError("quat 长度必须为4，顺序应为 [w, x, y, z]")
+    # 归一化
+    norm = np.linalg.norm(quat)
+    if norm == 0:
+        raise ValueError("零四元数无法转换")
+    quat = quat / norm
+    w, x, y, z = quat
+
+    # 构造旋转矩阵（row-major）
+    R = np.array([
+        [1 - 2*(y*y + z*z),  2*(x*y - w*z),      2*(x*z + w*y)],
+        [2*(x*y + w*z),      1 - 2*(x*x + z*z),  2*(y*z - w*x)],
+        [2*(x*z - w*y),      2*(y*z + w*x),      1 - 2*(x*x + y*y)]
+    ], dtype=float)
+
+    # 按 matrix_to_euler 的同样公式
+    roll = np.arctan2(R[2,1], R[2,2])
+    pitch = np.arctan2(-R[2,0], np.sqrt(R[2,1]**2 + R[2,2]**2))
+    yaw = np.arctan2(R[1,0], R[0,0])
+
+    return [np.degrees(roll), np.degrees(pitch), np.degrees(yaw)]
+
+def get_qpos(physics:mujoco.Physics):
         qpos_raw = physics.data.qpos.copy()
         left_qpos_raw = qpos_raw[:8]
         right_qpos_raw = qpos_raw[8:16]
@@ -128,6 +179,89 @@ def mat2quat(Rm):
     q = v[:, np.argmax(w)]
     # reorder to w,x,y,z
     return np.array([q[3], q[0], q[1], q[2]])
+
+
+def quat_mul(q1, q2):
+    """Quaternion multiply (w,x,y,z)"""
+    w1, x1, y1, z1 = q1
+    w2, x2, y2, z2 = q2
+    return np.array([
+        w1*w2 - x1*x2 - y1*y2 - z1*z2,
+        w1*x2 + x1*w2 + y1*z2 - z1*y2,
+        w1*y2 - x1*z2 + y1*w2 + z1*x2,
+        w1*z2 + x1*y2 - y1*x2 + z1*w2,
+    ])
+
+
+def orientation_error(R_current, tq):
+    """Compute orientation error as an axis-angle (rotvec) between R_current and target quaternion tq.
+
+    Inputs:
+        R_current: 3x3 rotation matrix
+        tq: target quaternion (w,x,y,z)
+    Returns:
+        rotvec: length-3 vector (angle * axis)
+    """
+    qc = mat2quat(R_current)
+    qc = qc / np.linalg.norm(qc)
+    qc_inv = np.array([qc[0], -qc[1], -qc[2], -qc[3]])
+    q_rel = quat_mul(tq, qc_inv)
+    if q_rel[0] < 0:
+        q_rel = -q_rel
+    w = np.clip(q_rel[0], -1.0, 1.0)
+    angle = 2 * np.arccos(w)
+    s = np.sqrt(max(0.0, 1 - w*w))
+    if s < 1e-8:
+        axis = q_rel[1:]
+    else:
+        axis = q_rel[1:] / s
+    return angle * axis
+
+
+def pose_error(q, fk_func, target_pos, tq, position_weight=1.0, orientation_weight=0.3):
+    """Compute weighted 6D pose error between fk_func(q) and target (target_pos, tq).
+
+    Returns a length-6 vector: [pos_weight * dp, ori_weight * rotvec]
+    计算位置和方向误差，并加权返回
+    """
+    T = fk_func(q)
+    dp = target_pos - T[:3, 3]
+    drot = orientation_error(T[:3, :3], tq)
+    return np.concatenate([position_weight * dp, orientation_weight * drot])
+
+
+def numerical_jacobian(q, fk_func, position_weight=1.0, orientation_weight=0.3, eps=1e-5):
+    """Numerical Jacobian of 6D pose (pos, ori) w.r.t. joint vector q.
+
+    fk_func should return a 4x4 transformation matrix for given q.
+    """
+    n = len(q)
+    J = np.zeros((6, n))
+    e0_T = fk_func(q)
+    p0 = e0_T[:3, 3]
+    R0 = e0_T[:3, :3]
+    for i in range(n):
+        dq = np.zeros(n);
+        dq[i] = eps
+        T1 = fk_func(q + dq)
+        p1 = T1[:3, 3]
+        R1 = T1[:3, :3]
+        J[:3, i] = (p1 - p0) / eps
+        Rrel = R0.T @ R1
+        tr = np.clip((np.trace(Rrel) - 1) / 2, -1, 1)
+        ang = np.arccos(tr)
+        if ang < 1e-9:
+            rvec = np.zeros(3)
+        else:
+            rv = np.array([
+                Rrel[2, 1] - Rrel[1, 2],
+                Rrel[0, 2] - Rrel[2, 0],
+                Rrel[1, 0] - Rrel[0, 1]
+            ]) / (2 * np.sin(ang))
+            rvec = ang * rv
+        J[3:, i] = orientation_weight * rvec / eps
+    J[:3, :] *= position_weight
+    return J
 
 def arm_ik(physics:mujoco.Physics, qpos_init, target_pos, target_quat, arm='right',
            max_iters=150, tol_pos=1e-4, tol_ori=2e-3, verbose=False,
@@ -179,79 +313,12 @@ def arm_ik(physics:mujoco.Physics, qpos_init, target_pos, target_quat, arm='righ
         ])
 
     def clamp(q):
+        """Clamp joint angles to limits."""
         return np.clip(q, joint_limits[:,0], joint_limits[:,1])
 
     def fk(q):
+        """Forward kinematics function for the specified arm."""
         return left_arm_fk(q) if arm == 'left' else right_arm_fk(q)
-
-    def quat_mul(q1, q2):
-        w1,x1,y1,z1 = q1
-        w2,x2,y2,z2 = q2
-        return np.array([
-            w1*w2 - x1*x2 - y1*y2 - z1*z2,
-            w1*x2 + x1*w2 + y1*z2 - z1*y2,
-            w1*y2 - x1*z2 + y1*w2 + z1*x2,
-            w1*z2 + x1*y2 - y1*x2 + z1*w2
-        ])
-
-    def orientation_error(R_current, tq):
-        # 当前旋转矩阵 -> 四元数
-        qc = mat2quat(R_current)
-        qc = qc / np.linalg.norm(qc)
-        # 计算相对四元数: q_rel = tq * qc^{-1}
-        qc_inv = np.array([qc[0], -qc[1], -qc[2], -qc[3]])
-        q_rel = quat_mul(tq, qc_inv)
-        if q_rel[0] < 0:  # 选择最短旋转
-            q_rel = -q_rel
-        # 将相对四元数转换为旋转向量: angle = 2*acos(w), axis = v/|v|
-        w = np.clip(q_rel[0], -1.0, 1.0)
-        angle = 2*np.arccos(w)
-        s = np.sqrt(1 - w*w)
-        if s < 1e-8:
-            axis = q_rel[1:]
-        else:
-            axis = q_rel[1:] / s
-        rotvec = angle * axis  # 这就是方向误差 (轴角)
-        return rotvec
-
-    def pose_error(q):
-        T = fk(q)
-        dp = target_pos - T[:3,3]
-        drot = orientation_error(T[:3,:3], tq)
-        # 加权 6D 误差
-        return np.concatenate([position_weight*dp, orientation_weight*drot])
-
-    def numerical_jacobian(q, eps=1e-5):
-        n = len(q)
-        J = np.zeros((6, n))
-        e0_T = fk(q)
-        p0 = e0_T[:3,3]
-        R0 = e0_T[:3,:3]
-        for i in range(n):
-            dq = np.zeros(n); dq[i] = eps
-            T1 = fk(q + dq)
-            p1 = T1[:3,3]
-            R1 = T1[:3,:3]
-            # 位置偏导
-            J[:3,i] = (p1 - p0)/eps
-            # 方向偏导: 近似 (orientation_error(R1) - orientation_error(R0))/eps
-            # 但 orientation_error 需要与目标相比; 使用 log(R0^T R1)/eps 简化
-            Rrel = R0.T @ R1
-            tr = np.clip((np.trace(Rrel)-1)/2, -1, 1)
-            ang = np.arccos(tr)
-            if ang < 1e-9:
-                rvec = np.zeros(3)
-            else:
-                rv = np.array([
-                    Rrel[2,1]-Rrel[1,2],
-                    Rrel[0,2]-Rrel[2,0],
-                    Rrel[1,0]-Rrel[0,1]
-                ])/(2*np.sin(ang))
-                rvec = ang * rv
-            J[3:,i] = orientation_weight * rvec / eps
-        # 位置行乘以位置权重
-        J[:3,:] *= position_weight
-        return J
 
     best_q = None
     best_err = 1e4
@@ -267,7 +334,7 @@ def arm_ik(physics:mujoco.Physics, qpos_init, target_pos, target_quat, arm='righ
         lam = 1e-2   # 初始阻尼
         prev_cost = None
         for it in range(max_iters):
-            err = pose_error(q)
+            err = pose_error(q, fk, target_pos, tq, position_weight, orientation_weight)
             pos_err = np.linalg.norm(err[:3]) / max(position_weight, 1e-8)
             ori_err = np.linalg.norm(err[3:]) / max(orientation_weight, 1e-8)
             cost = 0.5 * (err @ err)
@@ -275,7 +342,7 @@ def arm_ik(physics:mujoco.Physics, qpos_init, target_pos, target_quat, arm='righ
                 print(f"[IK {arm} seed{seed_id}] iter {it}: pos={pos_err:.4e}, ori={ori_err:.4e}, lam={lam:.2e}")
             if pos_err < tol_pos and ori_err < tol_ori:
                 break
-            J = numerical_jacobian(q)
+            J = numerical_jacobian(q, fk, position_weight, orientation_weight)
             # LM: (J^T J + lambda I) dq = J^T err
             JTJ = J.T @ J
             g = J.T @ err
@@ -291,7 +358,7 @@ def arm_ik(physics:mujoco.Physics, qpos_init, target_pos, target_quat, arm='righ
             if step_norm > max_step:
                 dq = dq * (max_step / (step_norm + 1e-9))
             q_trial = clamp(q + dq)
-            err_trial = pose_error(q_trial)
+            err_trial = pose_error(q_trial, fk, target_pos, tq, position_weight, orientation_weight)
             cost_trial = 0.5 * (err_trial @ err_trial)
             # 自适应阻尼: 成功下降则减小 lambda, 否则增大并重试
             if cost_trial < cost:
@@ -304,7 +371,7 @@ def arm_ik(physics:mujoco.Physics, qpos_init, target_pos, target_quat, arm='righ
             if lam >= 1e2 and (prev_cost is not None) and cost_trial >= prev_cost:
                 break
         # 记录最好解
-        final_err = pose_error(q)
+        final_err = pose_error(q, fk, target_pos, tq, position_weight, orientation_weight)
         final_cost = 0.5 * (final_err @ final_err)
         if final_cost < best_err:
             best_err = final_cost
@@ -317,57 +384,6 @@ def arm_ik(physics:mujoco.Physics, qpos_init, target_pos, target_quat, arm='righ
             break
 
     return best_q if best_q is not None else q_current
-
-def matrix_to_euler(mat):
-    """
-    标准 ZYX 欧拉角（yaw, pitch, roll）提取公式
-    输入：mat为3x3旋转矩阵展开成的长度为9的一维数组，要flatten后传入
-    输出：返回顺序为 (roll, pitch, yaw)，单位：度
-    ## R = Rz * Ry * Rx
-    """
-    # 检测mat是否为3x3：
-    assert len(mat) == 9
-
-    roll = np.arctan2(mat[7], mat[8])
-    pitch = np.arctan2(-mat[6], np.sqrt(mat[7]**2 + mat[8]**2))
-    yaw = np.arctan2(mat[3], mat[0])
-
-    yaw = np.degrees(yaw)
-    pitch = np.degrees(pitch)
-    roll = np.degrees(roll)
-    return [roll, pitch, yaw]
-
-def quat_to_euler(quat):
-    """
-    将四元数 
-    # (w, x, y, z)
-    转换为与 matrix_to_euler 一致的 ZYX 欧拉角 (返回顺序: roll, pitch, yaw) ，单位：度
-    与 matrix_to_euler 保持同一分解
-    ## R = Rz * Ry * Rx
-    """
-    quat = np.asarray(quat, dtype=float)
-    if quat.shape[-1] != 4:
-        raise ValueError("quat 长度必须为4，顺序应为 [w, x, y, z]")
-    # 归一化
-    norm = np.linalg.norm(quat)
-    if norm == 0:
-        raise ValueError("零四元数无法转换")
-    quat = quat / norm
-    w, x, y, z = quat
-
-    # 构造旋转矩阵（row-major）
-    R = np.array([
-        [1 - 2*(y*y + z*z),  2*(x*y - w*z),      2*(x*z + w*y)],
-        [2*(x*y + w*z),      1 - 2*(x*x + z*z),  2*(y*z - w*x)],
-        [2*(x*z - w*y),      2*(y*z + w*x),      1 - 2*(x*x + y*y)]
-    ], dtype=float)
-
-    # 按 matrix_to_euler 的同样公式
-    roll = np.arctan2(R[2,1], R[2,2])
-    pitch = np.arctan2(-R[2,0], np.sqrt(R[2,1]**2 + R[2,2]**2))
-    yaw = np.arctan2(R[1,0], R[0,0])
-
-    return [np.degrees(roll), np.degrees(pitch), np.degrees(yaw)]
 
 
 if __name__ == "__main__":

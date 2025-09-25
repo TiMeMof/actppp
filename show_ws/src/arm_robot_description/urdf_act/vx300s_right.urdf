@@ -1,0 +1,220 @@
+<?xml version="1.0"?>
+<!-- Converted (basic) URDF from assets/bimanual_viperx_transfer_cube copy.xml
+     Notes:
+     - Mesh files referenced from the same assets/ directory.
+     - Inertial elements use MuJoCo mass and diaginertia as inertia xx,yy,zz.
+     - Rotations (quaternions) are not fully converted; orientation defaults to identity.
+     - Joint axes and limits are taken from MuJoCo joint attributes.
+     - This is a conservative automatic conversion for visualization and further refinement.
+-->
+<robot name="vx300s_bimanual">
+  <!-- base link -->
+  <link name="base_link">
+    <!-- Decorative base mesh for left arm reference (no inertia, no collision) -->
+    <visual name="right_base_decor">
+      <origin xyz="0.469 0.5 0" rpy="0 0 -1.57"/>
+      <geometry>
+        <mesh filename="../urdf/vx300s_1_base.stl" scale="0.001 0.001 0.001"/>
+      </geometry>
+    </visual>
+  </link>
+
+  <!-- RIGHT ARM: mirror of left; positions from XML -->
+  <link name="right_shoulder_link">
+    <inertial>
+      <origin xyz="0.000259233 -0.0000033552 0.0116129"/>
+      <mass value="0.798614"/>
+      <inertia ixx="0.00120156" ixy="0" ixz="0" iyy="0.00113744" iyz="0" izz="0.0009388"/>
+    </inertial>
+    <visual>
+      <origin xyz="0 0 -0.003" rpy="0 0 1.5708"/>
+      <geometry>
+  <mesh filename="../urdf/vx300s_2_shoulder.stl" scale="0.001 0.001 0.001"/>
+      </geometry>
+    </visual>
+  </link>
+
+  <joint name="vx300s_right_waist" type="revolute">
+    <parent link="base_link"/>
+    <child link="right_shoulder_link"/>
+    <origin xyz="0.469 0.5 0.079" rpy="0 0 3.1416"/>
+    <axis xyz="0 0 1"/>
+    <limit lower="-3.14158" upper="3.14158" effort="150" velocity="10"/>
+  </joint>
+
+  <!-- For brevity, reuse similar link/joint patterns for right arm using same inertial/mesh files as left -->
+  <link name="right_upper_arm_link">
+    <inertial>
+      <origin xyz="0.0206949 0 0.226459"/>
+      <mass value="0.792592"/>
+      <inertia ixx="0.00911338" ixy="0" ixz="0" iyy="0.008925" iyz="0" izz="0.000759317"/>
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 1.5708"/>
+      <geometry>
+  <mesh filename="../urdf/vx300s_3_upper_arm.stl" scale="0.001 0.001 0.001"/>
+      </geometry>
+    </visual>
+  </link>
+
+  <joint name="vx300s_right_shoulder" type="revolute">
+    <parent link="right_shoulder_link"/>
+    <child link="right_upper_arm_link"/>
+    <origin xyz="0 0 0.04805" rpy="0 0 0"/>
+    <axis xyz="0 1 0"/>
+    <limit lower="-1.85005" upper="1.25664" effort="300" velocity="10"/>
+  </joint>
+
+  <link name="right_upper_forearm_link">
+    <inertial>
+      <origin xyz="0.105723 0 0"/>
+      <mass value="0.322228"/>
+      <inertia ixx="0.00144107" ixy="0" ixz="0" iyy="0.00134228" iyz="0" izz="0.000152047"/>
+    </inertial>
+    <visual>
+      <geometry>
+  <mesh filename="../urdf/vx300s_4_upper_forearm.stl" scale="0.001 0.001 0.001"/>
+      </geometry>
+    </visual>
+  </link>
+
+  <joint name="vx300s_right_elbow" type="revolute">
+    <parent link="right_upper_arm_link"/>
+    <child link="right_upper_forearm_link"/>
+    <origin xyz="0.05955 0 0.3" rpy="0 0 0"/>
+    <axis xyz="0 1 0"/>
+    <limit lower="-1.76278" upper="1.6057" effort="100" velocity="10"/>
+  </joint>
+
+  <link name="right_lower_forearm_link">
+    <inertial>
+      <origin xyz="0.0513477 0.00680462 0"/>
+      <mass value="0.414823"/>
+      <inertia ixx="0.0005911" ixy="0" ixz="0" iyy="0.000546493" iyz="0" izz="0.000155707"/>
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0" rpy="3.14159 0 0"/>
+      <geometry>
+  <mesh filename="../urdf/vx300s_5_lower_forearm.stl" scale="0.001 0.001 0.001"/>
+      </geometry>
+    </visual>
+  </link>
+
+  <joint name="vx300s_right_forearm_roll" type="revolute">
+    <parent link="right_upper_forearm_link"/>
+    <child link="right_lower_forearm_link"/>
+    <origin xyz="0.2 0 0" rpy="0 0 0"/>
+    <axis xyz="1 0 0"/>
+    <limit lower="-3.14158" upper="3.14158" effort="100" velocity="10"/>
+  </joint>
+
+  <link name="right_wrist_link">
+    <inertial>
+      <origin xyz="0.046743 -0.0000076652 0.010565"/>
+      <mass value="0.115395"/>
+      <inertia ixx="0.0000545707" ixy="0" ixz="0" iyy="0.0000463101" iyz="0" izz="0.0000432692"/>
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 1.5708"/>
+      <geometry>
+  <mesh filename="../urdf/vx300s_6_wrist.stl" scale="0.001 0.001 0.001"/>
+      </geometry>
+    </visual>
+  </link>
+
+  <joint name="vx300s_right_wrist_angle" type="revolute">
+    <parent link="right_lower_forearm_link"/>
+    <child link="right_wrist_link"/>
+    <origin xyz="0.1 0 0" rpy="0 0 0"/>
+    <axis xyz="0 1 0"/>
+    <limit lower="-1.8675" upper="2.23402" effort="100" velocity="10"/>
+  </joint>
+
+  <joint name="vx300s_right_wrist_rotate" type="revolute">
+    <parent link="right_wrist_link"/>
+    <child link="right_gripper_link"/>
+    <origin xyz="0.069744 0 0" rpy="0 0 0"/>
+    <axis xyz="1 0 0"/>
+    <limit lower="-3.14158" upper="3.14158" effort="100" velocity="10"/>
+  </joint>
+
+  <link name="right_gripper_link">
+    <inertial>
+      <origin xyz="0.0395662 -0.000000256311 0.00400649"/>
+      <mass value="0.251652"/>
+      <inertia ixx="0.000689546" ixy="0" ixz="0" iyy="0.000650316" iyz="0" izz="0.000468142"/>
+    </inertial>
+    <visual>
+      <origin xyz="-0.02 0 0" rpy="0 0 1.5708"/>
+      <geometry>
+  <mesh filename="../urdf/vx300s_7_gripper.stl" scale="0.001 0.001 0.001"/>
+      </geometry>
+    </visual>
+  </link>
+
+  <!-- right gripper prop link -->
+  <link name="right_gripper_prop_link">
+    <inertial>
+      <origin xyz="0.002378 0 0"/>
+      <mass value="0.008009"/>
+      <inertia ixx="4.2979e-06" ixy="0" ixz="0" iyy="2.8868e-06" iyz="0" izz="1.5314e-06"/>
+    </inertial>
+    <visual>
+      <origin xyz="-0.0685 0 0" rpy="0 0 1.5708"/>
+      <geometry>
+        <mesh filename="../urdf/vx300s_9_gripper_bar.stl" scale="0.001 0.001 0.001"/>
+      </geometry>
+    </visual>
+  </link>
+
+  <joint name="vx300s_right_gripper_prop" type="fixed">
+    <parent link="right_gripper_link"/>
+    <child link="right_gripper_prop_link"/>
+    <origin xyz="0.0485 0 0" rpy="0 0 0"/>
+  </joint>
+
+  <!-- <joint name="vx300s_right_left_finger" type="prismatic">
+    <parent link="right_gripper_link"/>
+    <child link="right_left_finger_link"/>
+    <origin xyz="0.0687 0 0"/>
+    <axis xyz="0 1 0"/>
+    <limit lower="0.021" upper="0.057" effort="50" velocity="0.1"/>
+  </joint>
+
+  <link name="right_left_finger_link">
+    <inertial>
+      <origin xyz="0.017344 -0.0060692 0"/>
+      <mass value="0.034796"/>
+      <inertia ixx="0.0000248003" ixy="0" ixz="0" iyy="0.00001417" iyz="0" izz="0.0000120797"/>
+    </inertial>
+    <visual>
+      <origin xyz="0.005 -0.052 0" rpy="3.14 -1.57 0"/>
+      <geometry>
+  <mesh filename="../urdf/vx300s_10_custom_finger_left.stl" scale="0.001 0.001 0.001"/>
+      </geometry>
+    </visual>
+  </link>
+
+  <joint name="vx300s_right_right_finger" type="prismatic">
+    <parent link="right_gripper_link"/>
+    <child link="right_right_finger_link"/>
+    <origin xyz="0.0687 0 0"/>
+    <axis xyz="0 1 0"/>
+    <limit lower="-0.057" upper="-0.021" effort="50" velocity="0.1"/>
+  </joint>
+
+  <link name="right_right_finger_link">
+    <inertial>
+      <origin xyz="0.017344 0.0060692 0"/>
+      <mass value="0.034796"/>
+      <inertia ixx="0.0000248002" ixy="0" ixz="0" iyy="0.00001417" iyz="0" izz="0.0000120798"/>
+    </inertial>
+    <visual>
+      <origin xyz="0.005 0.052 0" rpy="3.14 -1.57 0"/>
+      <geometry>
+  <mesh filename="../urdf/vx300s_10_custom_finger_right.stl" scale="0.001 0.001 0.001"/>
+      </geometry>
+    </visual>
+  </link> -->
+
+</robot>

@@ -12,6 +12,7 @@ import wandb
 import time
 from torchvision import transforms
 import arm_FK
+from show_ws.src.arm_robot_description.scripts.seed_joint_states import RobotController
 
 
 from constants import FPS
@@ -257,6 +258,9 @@ def eval_bc(config, ckpt_name, save_episode=True, num_rollouts=50):
     actuator_config = config['actuator_config']
     use_actuator_net = actuator_config['actuator_network_dir'] is not None
 
+    left_arm_controller = RobotController('/home/moyufan/actppp/show_ws/src/arm_robot_description/urdf_act/vx300s_left.urdf')
+    right_arm_controller = RobotController('/home/moyufan/actppp/show_ws/src/arm_robot_description/urdf_act/vx300s_right.urdf')
+
     # load policy and stats
     ckpt_path = os.path.join(ckpt_dir, ckpt_name)
     policy = make_policy(policy_class, policy_config)
@@ -477,13 +481,19 @@ def eval_bc(config, ckpt_name, save_episode=True, num_rollouts=50):
                 action = post_process(raw_action)
                 target_qpos = action[:-2]
                 if config['use_ee']:
-                    chuyi = 1
-                    left_pose = target_qpos[:7]/chuyi
+                    # 若用了ee，这时候的target_qpos其实是ee，需要转成qpos
+                    left_pose = target_qpos[:7]
                     left_gripper = target_qpos[7]
-                    target_qpos_left = arm_FK.arm_ik(env._physics, qpos_numpy, target_pos=left_pose[:3], target_quat=[0.99875, 0, -0.04998, 0], arm='left')
-                    right_pose = target_qpos[8:15]/chuyi
+                    # target_qpos_left = arm_FK.arm_ik(env._physics, qpos_numpy, target_pos=left_pose[:3], target_quat=[0.99875, 0, -0.04998, 0], arm='left')
+                    suc_l, target_qpos_left, err_l, it_l = left_arm_controller.solve_ik(target_position=left_pose[:3], 
+                                                                                        target_orientation=left_pose[3:],
+                                                                                        initial_joints=qpos_numpy[:6])
+                    right_pose = target_qpos[8:15]
                     right_gripper = target_qpos[15]
-                    target_qpos_right = arm_FK.arm_ik(env._physics, qpos_numpy, target_pos=right_pose[:3], target_quat=[0, 0.04998, 0, 0.99875], arm='right')
+                    # target_qpos_right = arm_FK.arm_ik(env._physics, qpos_numpy, target_pos=right_pose[:3], target_quat=[0, 0.04998, 0, 0.99875], arm='right')
+                    suc_r, target_qpos_right, err_r, it_r = right_arm_controller.solve_ik(target_position=right_pose[:3], 
+                                                                                         target_orientation=right_pose[3:],
+                                                                                         initial_joints=qpos_numpy[7:13])
                     target_qpos = np.concatenate([target_qpos_left, [left_gripper], target_qpos_right, [right_gripper]])
                 else:
                     tp = target_qpos.copy()
@@ -491,10 +501,17 @@ def eval_bc(config, ckpt_name, save_episode=True, num_rollouts=50):
                     right_gripper = tp[13]
                     lfee = arm_FK.left_arm_fk(tp[:6])
                     riee = arm_FK.right_arm_fk(tp[7:13])
-                    target_qpos_left = arm_FK.arm_ik(env._physics,qpos_numpy, target_pos=lfee[:3, 3], target_quat=arm_FK.mat2quat(lfee[:3, :3]), arm='left')
-                    target_qpos_right = arm_FK.arm_ik(env._physics,qpos_numpy, target_pos=riee[:3, 3], target_quat=arm_FK.mat2quat(riee[:3, :3]), arm='right')
+                    # target_qpos_left = arm_FK.arm_ik(env._physics,qpos_numpy, target_pos=lfee[:3, 3], target_quat=arm_FK.mat2quat(lfee[:3, :3]), arm='left')
+                    # target_qpos_right = arm_FK.arm_ik(env._physics,qpos_numpy, target_pos=riee[:3, 3], target_quat=arm_FK.mat2quat(riee[:3, :3]), arm='right')
+                    # tp = np.concatenate([target_qpos_left, [left_gripper], target_qpos_right, [right_gripper]])
+                    suc_l, target_qpos_left, err_l, it_l = left_arm_controller.solve_ik(target_position=lfee[:3, 3], 
+                                                                                                               target_orientation=arm_FK.mat2quat(lfee[:3, :3]),
+                                                                                                               initial_joints=tp[:6])
+                    suc_r, target_qpos_right, err_r, it_r = right_arm_controller.solve_ik(target_position=riee[:3, 3], 
+                                                                                                                    target_orientation=arm_FK.mat2quat(riee[:3, :3]), 
+                                                                                                                    initial_joints=tp[7:13])
                     tp = np.concatenate([target_qpos_left, [left_gripper], target_qpos_right, [right_gripper]])
-                    print(f"difference between ik and fk: {sum(np.round((tp - target_qpos), 3))}")
+                    print(f"difference between ik and fk: {sum(np.round((tp - target_qpos), 5))}")
                     # print(lfee[:3, 3],ee[:3])
                     # target_qpos = tp.copy()
                 base_action = action[-2:]

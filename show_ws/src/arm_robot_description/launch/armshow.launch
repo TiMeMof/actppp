@@ -1,0 +1,31 @@
+<launch>
+  <!-- <arg name="urdf_file" default="$(find arm_robot_description)/urdf/vx300s_bimanual.urdf"/> -->
+  <!-- <arg name="arms" default="vx300s_right"/> -->
+  <arg name="arms" default="vx300s_left"/>
+  <arg name="urdf_file" default="$(find arm_robot_description)/urdf/$(arg arms).urdf"/>
+  <arg name="use_gui_control" default="false"/>
+  <param name="robot_description" textfile="$(arg urdf_file)"/>
+
+  <!-- robot_state_publisher 发布 TF 树，自动读取robot_description -->
+  <node name="robot_state_publisher" pkg="robot_state_publisher" type="robot_state_publisher"/>
+
+  <!-- 若直接控制 -->
+  <node if="$(arg use_gui_control)" pkg="joint_state_publisher_gui" type="joint_state_publisher_gui" name="joint_state_publisher_gui"/>
+
+  <node pkg="arm_robot_description" type="seed_joint_states.py" name="seed_joint_states" output="screen">
+    <param name="yaml_path" value="$(find arm_robot_description)/config/initial_pose.yaml"/>
+    <param name="urdf_path" value="$(arg urdf_file)"/>
+  </node>
+
+
+  <!-- 若 RViz 选择 map 为 fixed frame 但未发布, 会报 Unknown Frame. 这里提供 map->base_link 静态TF(可选). -->
+  <arg name="provide_map_tf" default="true"/>
+  <group if="$(arg provide_map_tf)">
+    <!-- 发布一个单位变换, 你可以修改 xyz rpy -->
+    <node pkg="tf" type="static_transform_publisher" name="map_to_base_link" args="0 0 0 0 0 0 map base_link 100"/>
+  </group>
+
+  <node name="rviz" pkg="rviz" type="rviz" output="screen" args="-d $(find arm_robot_description)/rviz/display.rviz" />
+
+</launch>
+ 
