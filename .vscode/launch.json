@@ -106,7 +106,7 @@
                 "--task_name",
                 "sim_transfer_cube_ee",
                 "--ckpt_dir",
-                "ckpt/act2",
+                "ckpt/act3",
                 "--policy_class",
                 "ACT",
                 "--kl_weight",
@@ -120,11 +120,12 @@
                 "--dim_feedforward",
                 "3200",
                 "--num_steps",
-                "60000",
+                "40000",
                 "--lr",
                 "1e-5",
                 "--seed",
-                "0"
+                "0",
+                "--use_ee"
             ]
         }
     ]

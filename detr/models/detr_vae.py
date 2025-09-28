@@ -42,7 +42,7 @@ def get_sinusoid_encoding_table(n_position, d_hid):
 
 class DETRVAE(nn.Module):
     """ This is the DETR module that performs object detection """
-    def __init__(self, backbones, transformer, encoder, state_dim, num_queries, camera_names, vq, vq_class, vq_dim, action_dim):
+    def __init__(self, backbones, transformer, encoder, state_dim, num_queries, camera_names, vq, vq_class, vq_dim, action_dim, use_ee):
         """ Initializes the model.
         Parameters:
             backbones: torch module of the backbone to be used. See backbone.py
@@ -58,12 +58,15 @@ class DETRVAE(nn.Module):
         self.transformer = transformer
         self.encoder = encoder
         self.vq, self.vq_class, self.vq_dim = vq, vq_class, vq_dim
-        self.state_dim, self.action_dim = state_dim, action_dim
+        self.state_dim, self.action_dim, self.use_ee = state_dim, action_dim, use_ee
         # 隐藏层维度，通常与 transformer 的 d_model 相同
         # d_model 是 transformer 中的一个重要参数，表示输入和输出的特征维度。
         hidden_dim = transformer.d_model
         # 把 transformer 的输出转成机器人动作向量。
-        self.action_head = nn.Linear(hidden_dim, action_dim)
+        if self.use_ee:
+            self.action_head = nn.Linear(hidden_dim, (3+6+1)*2)
+        else:
+            self.action_head = nn.Linear(hidden_dim, action_dim)
         self.is_pad_head = nn.Linear(hidden_dim, 1)
         # 这里的embedding层用于存储查询向量，这些查询向量在Transformer的解码器部分用于生成最终的输出。
         self.query_embed = nn.Embedding(num_queries, hidden_dim)
@@ -79,7 +82,7 @@ class DETRVAE(nn.Module):
             self.backbones = None
 
         # encoder extra parameters
-        self.latent_dim = 32 # final size of latent z # TODO tune
+        self.latent_dim = 64 # final size of latent z # TODO tune
         self.cls_embed = nn.Embedding(1, hidden_dim) # extra cls token embedding
         self.encoder_action_proj = nn.Linear(action_dim, hidden_dim) # project action to embedding
         self.encoder_joint_proj = nn.Linear(state_dim, hidden_dim)  # project qpos to embedding
@@ -98,6 +101,68 @@ class DETRVAE(nn.Module):
             self.latent_out_proj = nn.Linear(self.latent_dim, hidden_dim) # project latent sample to embedding
         self.additional_pos_embed = nn.Embedding(2, hidden_dim) # learned position embedding for proprio and latent
 
+    @staticmethod
+    def rot6d_to_matrix(x):
+        """
+        Convert 6D rotation representation to 3x3 rotation matrix.
+        Input: (B, 6) tensor
+        Output: (B, 3, 3) rotation matrix
+        """
+        x = x.view(-1, 6)
+        a1 = x[:, 0:3]
+        a2 = x[:, 3:6]
+
+        def normalize_vector(v, eps=1e-8):
+            """ Normalize a batch of vectors """
+            return v / (torch.norm(v, dim=-1, keepdim=True) + eps)
+        b1 = normalize_vector(a1)
+        b2 = normalize_vector(a2 - torch.sum(b1 * a2, dim=1, keepdim=True) * b1)
+        b3 = torch.cross(b1, b2, dim=1)
+
+        return torch.stack([b1, b2, b3], dim=-1)  # (B, 3, 3)
+
+    @staticmethod
+    def matrix_to_quaternion(R):
+        """
+        Convert rotation matrix to quaternion.
+        Input: (B, 3, 3)
+        Output: (B, 4) quaternions (x, y, z, w)
+        """
+        B = R.shape[0]
+        quat = torch.zeros(B, 4, device=R.device)
+
+        trace = R[:, 0, 0] + R[:, 1, 1] + R[:, 2, 2]
+        for i in range(B):
+            if trace[i] > 0:
+                s = torch.sqrt(trace[i] + 1.0) * 2
+                quat[i, 3] = 0.25 * s
+                quat[i, 0] = (R[i, 2, 1] - R[i, 1, 2]) / s
+                quat[i, 1] = (R[i, 0, 2] - R[i, 2, 0]) / s
+                quat[i, 2] = (R[i, 1, 0] - R[i, 0, 1]) / s
+            else:
+                # fallback cases, see: https://en.wikipedia.org/wiki/Rotation_matrix#Quaternion
+                if (R[i, 0, 0] > R[i, 1, 1]) and (R[i, 0, 0] > R[i, 2, 2]):
+                    s = torch.sqrt(1.0 + R[i, 0, 0] - R[i, 1, 1] - R[i, 2, 2]) * 2
+                    quat[i, 3] = (R[i, 2, 1] - R[i, 1, 2]) / s
+                    quat[i, 0] = 0.25 * s
+                    quat[i, 1] = (R[i, 0, 1] + R[i, 1, 0]) / s
+                    quat[i, 2] = (R[i, 0, 2] + R[i, 2, 0]) / s
+                elif R[i, 1, 1] > R[i, 2, 2]:
+                    s = torch.sqrt(1.0 + R[i, 1, 1] - R[i, 0, 0] - R[i, 2, 2]) * 2
+                    quat[i, 3] = (R[i, 0, 2] - R[i, 2, 0]) / s
+                    quat[i, 0] = (R[i, 0, 1] + R[i, 1, 0]) / s
+                    quat[i, 1] = 0.25 * s
+                    quat[i, 2] = (R[i, 1, 2] + R[i, 2, 1]) / s
+                else:
+                    s = torch.sqrt(1.0 + R[i, 2, 2] - R[i, 0, 0] - R[i, 1, 1]) * 2
+                    quat[i, 3] = (R[i, 1, 0] - R[i, 0, 1]) / s
+                    quat[i, 0] = (R[i, 0, 2] + R[i, 2, 0]) / s
+                    quat[i, 1] = (R[i, 1, 2] + R[i, 2, 1]) / s
+                    quat[i, 2] = 0.25 * s
+
+        # Normalize to unit quaternion
+        quat = F.normalize(quat, dim=-1)
+        return quat
 
     # 实现了 VAE 编码器的功能，将输入数据（如机器人的位置 qpos 和动作序列 actions）编码为潜在空间的表示。
     def encode(self, qpos, actions=None, is_pad=None, vq_sample=None):
@@ -187,7 +252,37 @@ class DETRVAE(nn.Module):
             env_state = self.input_proj_env_state(env_state)
             transformer_input = torch.cat([qpos, env_state], axis=1) # seq length = 2
             hs = self.transformer(transformer_input, None, self.query_embed.weight, self.pos.weight)[0]
-        a_hat = self.action_head(hs)
+        if self.use_ee:
+            a_tmp = self.action_head(hs)
+            
+            # 左臂
+            pos_l = a_tmp[..., :3]          # (B, num_queries, 3)
+            rot6d_l = a_tmp[..., 3:9]       # (B, num_queries, 6)
+            grip_l = a_tmp[..., 9:10]       # (B, num_queries, 1)
+            # 6D -> R -> quat
+            rot6d_l = rot6d_l.reshape(-1, 6)         # (B*num_queries, 6)
+            R = self.rot6d_to_matrix(rot6d_l)           # (B*num_queries, 3, 3)
+            quat_l = self.matrix_to_quaternion(R)        # (B*num_queries, 4)
+            quat_l = quat_l.view(hs.shape[0], hs.shape[1], 4)  # reshape回 (B, num_queries, 4)
+            quat_l = quat_l[..., [3, 0, 1, 2]]  # 变成 (w,x,y,z)
+
+            # 右臂
+            pos_r = a_tmp[..., 10:13]
+            rot6d_r = a_tmp[..., 13:19]
+            grip_r = a_tmp[..., 19:20]
+            rot6d_r = rot6d_r.reshape(-1, 6)
+            R = self.rot6d_to_matrix(rot6d_r)
+            quat_r = self.matrix_to_quaternion(R)
+            quat_r = quat_r.view(hs.shape[0], hs.shape[1], 4)  # reshape回 (B, num_queries, 4)
+            quat_r = quat_r[..., [3, 0, 1, 2]]  # (w,x,y,z)
+
+            # zero数组
+            zeros = torch.zeros(hs.shape[0], hs.shape[1], 2, device=hs.device, dtype=hs.dtype)
+
+            # 拼接成最终输出
+            a_hat = torch.cat([pos_l, quat_l, grip_l, pos_r, quat_r, grip_r, zeros], dim=-1)
+        else:
+            a_hat = self.action_head(hs)
         is_pad_hat = self.is_pad_head(hs)
         return a_hat, is_pad_hat, [mu, logvar], probs, binaries
 
@@ -302,7 +397,9 @@ def build_encoder(args):
 def build_vae(args):
 
     state_dim = args.state_dim
+    use_ee = args.use_ee
     print("-----------------------------state_dim:::::", state_dim)
+    print("-----------------------------use_ee:::::", use_ee)
     # state_dim = 14 # TODO hardcode
 
     # From state
@@ -325,13 +422,14 @@ def build_vae(args):
         backbones,
         transformer,
         encoder,
-        state_dim=state_dim,
+        state_dim=args.state_dim,
         num_queries=args.num_queries,
         camera_names=args.camera_names,
         vq=args.vq,
         vq_class=args.vq_class,
         vq_dim=args.vq_dim,
         action_dim=args.action_dim,
+        use_ee=args.use_ee
     )
 
     n_parameters = sum(p.numel() for p in model.parameters() if p.requires_grad)

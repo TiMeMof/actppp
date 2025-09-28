@@ -701,7 +701,7 @@ if __name__ == '__main__':
     parser.add_argument('--num_steps', action='store', type=int, help='num_steps', required=True)
     parser.add_argument('--lr', action='store', type=float, help='lr', required=True)
     parser.add_argument('--load_pretrain', action='store_true', default=False)
-    parser.add_argument('--eval_every', action='store', type=int, default=500, help='eval_every', required=False)
+    parser.add_argument('--eval_every', action='store', type=int, default=1000, help='eval_every', required=False)
     parser.add_argument('--validate_every', action='store', type=int, default=500, help='validate_every', required=False)
     parser.add_argument('--save_every', action='store', type=int, default=500, help='save_every', required=False)
     parser.add_argument('--resume_ckpt_path', action='store', type=str, help='resume_ckpt_path', required=False)

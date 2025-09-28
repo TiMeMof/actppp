@@ -397,9 +397,13 @@ class RobotController:
                 # 验证关节限制（可选）
                 if hasattr(self.model, 'lowerPositionLimit') and hasattr(self.model, 'upperPositionLimit'):
                     for j in range(len(q)):
-                        if (q[j] < self.model.lowerPositionLimit[j] or 
-                            q[j] > self.model.upperPositionLimit[j]):
+                        if (q[j] < self.model.lowerPositionLimit[j]):
+                            q[j] = self.model.lowerPositionLimit[j]
                             print(f"Joint {j} exceeds limits: {q[j]:.3f} not in [{self.model.lowerPositionLimit[j]:.3f}, {self.model.upperPositionLimit[j]:.3f}]")
+                        elif q[j] > self.model.upperPositionLimit[j]:
+                            q[j] = self.model.upperPositionLimit[j]
+                            print(f"Joint {j} exceeds limits: {q[j]:.3f} not in [{self.model.lowerPositionLimit[j]:.3f}, {self.model.upperPositionLimit[j]:.3f}]")
+
                 
                 # 验证最终位置误差
                 pin.forwardKinematics(self.model, self.data, q)
