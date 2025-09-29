@@ -117,6 +117,7 @@ def main(args):
                          'num_inference_timesteps': 10,
                          'ema_power': 0.75,
                          'vq': False,
+                         'use_ee':use_ee,
                          }
     elif policy_class == 'CNNMLP':
         policy_config = {'lr': args['lr'], 'lr_backbone': lr_backbone, 'backbone' : backbone, 'num_queries': 1,
@@ -164,7 +165,7 @@ def main(args):
     with open(config_path, 'wb') as f:
         pickle.dump(config, f)
     if is_eval:
-        ckpt_names = [f'policy_last.ckpt']
+        ckpt_names = [f'policy_best.ckpt']
         results = []
         for ckpt_name in ckpt_names:
             success_rate, avg_return = eval_bc(config, ckpt_name, save_episode=True, num_rollouts=10)
@@ -482,11 +483,19 @@ def eval_bc(config, ckpt_name, save_episode=True, num_rollouts=50):
                 if config['use_ee']:
                     # 若用了ee，这时候的target_qpos其实是ee，需要转成qpos
                     left_pose = target_qpos[:7]
+                    # 从left_pose提取四元数，把虚部xyz变成-x-y-z
+                    # left_quat = left_pose[3:].copy()
+                    # left_quat[1:] = -left_quat[1:]
+                    # left_pose[3:] = left_quat
                     left_gripper = target_qpos[7]
                     suc_l, target_qpos_left, err_l, it_l = left_arm_controller.solve_ik(target_position=left_pose[:3], 
                                                                                         target_orientation=left_pose[3:],
                                                                                         initial_joints=qpos_numpy[:6])
                     right_pose = target_qpos[8:15]
+                    # # 从right_pose提取四元数，把虚部xyz变成-x-y-z
+                    # right_quat = right_pose[3:].copy()
+                    # right_quat[1:] = -right_quat[1:]
+                    # right_pose[3:] = right_quat
                     right_gripper = target_qpos[15]
                     suc_r, target_qpos_right, err_r, it_r = right_arm_controller.solve_ik(target_position=right_pose[:3], 
                                                                                          target_orientation=right_pose[3:],
@@ -605,7 +614,7 @@ def train_bc(train_dataloader, val_dataloader, config):
 
     policy = make_policy(policy_class, policy_config)
     if config['load_pretrain']:
-        loading_status = policy.deserialize(torch.load(os.path.join('/home/zfu/interbotix_ws/src/act/ckpts/pretrain_all', 'policy_step_50000_seed_0.ckpt')))
+        loading_status = policy.deserialize(torch.load(os.path.join('/home/moyufan/actppp/ckpt/act4', 'policy_best.ckpt')))
         print(f'loaded! {loading_status}')
     if config['resume_ckpt_path'] is not None:
         loading_status = policy.deserialize(torch.load(config['resume_ckpt_path']))
@@ -701,9 +710,9 @@ if __name__ == '__main__':
     parser.add_argument('--num_steps', action='store', type=int, help='num_steps', required=True)
     parser.add_argument('--lr', action='store', type=float, help='lr', required=True)
     parser.add_argument('--load_pretrain', action='store_true', default=False)
-    parser.add_argument('--eval_every', action='store', type=int, default=1000, help='eval_every', required=False)
+    parser.add_argument('--eval_every', action='store', type=int, default=500, help='eval_every', required=False)
     parser.add_argument('--validate_every', action='store', type=int, default=500, help='validate_every', required=False)
-    parser.add_argument('--save_every', action='store', type=int, default=500, help='save_every', required=False)
+    parser.add_argument('--save_every', action='store', type=int, default=1000, help='save_every', required=False)
     parser.add_argument('--resume_ckpt_path', action='store', type=str, help='resume_ckpt_path', required=False)
     parser.add_argument('--skip_mirrored_data', action='store_true')
     parser.add_argument('--actuator_network_dir', action='store', type=str, help='actuator_network_dir', required=False)

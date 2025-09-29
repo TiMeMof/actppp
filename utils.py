@@ -364,8 +364,8 @@ def get_ee_norm_stats(dataset_path_list):
     ee_std = all_ee_data.std(dim=[0]).float()
     ee_std = torch.clip(ee_std, 1e-2, np.inf) # clipping
 
-    action_min = all_ee_data.min(dim=0).values.float()
-    action_max = all_ee_data.max(dim=0).values.float()
+    action_min = all_action_ee_data.min(dim=0).values.float()
+    action_max = all_action_ee_data.max(dim=0).values.float()
 
     eps = 0.0001
     stats = {"action_mean": action_mean.numpy(), "action_std": action_std.numpy(),
@@ -452,7 +452,7 @@ def load_data(use_ee, dataset_dir_l, name_filter, camera_names, batch_size_train
     else:
         train_dataset = EpisodicDataset(dataset_path_list, camera_names, norm_stats, train_episode_ids, train_episode_len, chunk_size, policy_class)
         val_dataset = EpisodicDataset(dataset_path_list, camera_names, norm_stats, val_episode_ids, val_episode_len, chunk_size, policy_class)
-    train_num_workers = (8 if os.getlogin() == 'zfu' else 16) if train_dataset.augment_images else 2
+    train_num_workers = 16 if train_dataset.augment_images else 2
     val_num_workers = 8 if train_dataset.augment_images else 2
     print(f'Augment images: {train_dataset.augment_images}, train_num_workers: {train_num_workers}, val_num_workers: {val_num_workers}')
     train_dataloader = DataLoader(train_dataset, batch_sampler=batch_sampler_train, pin_memory=True, num_workers=train_num_workers, prefetch_factor=2)

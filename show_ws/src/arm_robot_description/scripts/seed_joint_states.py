@@ -398,11 +398,11 @@ class RobotController:
                 if hasattr(self.model, 'lowerPositionLimit') and hasattr(self.model, 'upperPositionLimit'):
                     for j in range(len(q)):
                         if (q[j] < self.model.lowerPositionLimit[j]):
+                            print(f"Joint {j} exceeds limits: {q[j]:.3f} not in [{self.model.lowerPositionLimit[j]:.3f}, {self.model.upperPositionLimit[j]:.3f}]")
                             q[j] = self.model.lowerPositionLimit[j]
-                            print(f"Joint {j} exceeds limits: {q[j]:.3f} not in [{self.model.lowerPositionLimit[j]:.3f}, {self.model.upperPositionLimit[j]:.3f}]")
                         elif q[j] > self.model.upperPositionLimit[j]:
-                            q[j] = self.model.upperPositionLimit[j]
                             print(f"Joint {j} exceeds limits: {q[j]:.3f} not in [{self.model.lowerPositionLimit[j]:.3f}, {self.model.upperPositionLimit[j]:.3f}]")
+                            q[j] = self.model.upperPositionLimit[j]
 
                 
                 # 验证最终位置误差
@@ -434,13 +434,13 @@ def load_yaml(path):
 ee = [-0.3171888114641615, 0.5, 0.29525083628615956, 0.9987502603949664, 0.0, -0.04997916927067836, 0.0]
 joints = [0,-0.96, 1.16, 0, -0.3, 0]
 def main():
-    import rospy
-    from sensor_msgs.msg import JointState
-    rospy.init_node('seed_joint_states')
-    yaml_path = rospy.get_param('~yaml_path', '')
-    urdf_path = rospy.get_param('~urdf_path', '')
-    # yaml_path = '/home/ubuntu/actppp/assets/show_ws/src/arm_robot_description/config/initial_pose.yaml'
-    # urdf_path = '/home/ubuntu/actppp/assets/show_ws/src/arm_robot_description/urdf/vx300s_bimanual copy.urdf'
+    # import rospy
+    # from sensor_msgs.msg import JointState
+    # rospy.init_node('seed_joint_states')
+    # yaml_path = rospy.get_param('~yaml_path', '')
+    # urdf_path = rospy.get_param('~urdf_path', '')
+    yaml_path = '/home/moyufan/actppp/show_ws/src/arm_robot_description/config/initial_pose.yaml'
+    urdf_path = '/home/moyufan/actppp/show_ws/src/arm_robot_description/urdf_act/vx300s_left.urdf'
 
     if not yaml_path:
         print('No ~yaml_path param provided to seed_joint_states (e.g. yaml_path:=...)')
@@ -451,10 +451,10 @@ def main():
     data = load_yaml(yaml_path) or {}
 
     # Preserve YAML order (PyYAML >=5 keeps insertion order); optionally sort if param set
-    sort_joints = rospy.get_param('~sort_joints', False)
+    # sort_joints = rospy.get_param('~sort_joints', False)
     items = list(data.items())
-    if sort_joints:
-        items.sort(key=lambda kv: kv[0])
+    # if sort_joints:
+    #     items.sort(key=lambda kv: kv[0])
 
     # 根据URDF路径判断是左臂还是右臂
     is_left_arm = 'left' in os.path.basename(urdf_path) if urdf_path else True
@@ -473,22 +473,22 @@ def main():
     print(f"Joint names: {joint_names}")
     if not joint_names:
         print('No joint numeric entries found in YAML: %s', yaml_path)
-    pub = rospy.Publisher('/joint_states', JointState, queue_size=1, latch=True)
-    rospy.sleep(0.2)  # small delay to allow publisher registration before publish
+    # pub = rospy.Publisher('/joint_states', JointState, queue_size=1, latch=True)
+    # rospy.sleep(0.2)  # small delay to allow publisher registration before publish
 
     # Load robot model for IK if URDF provided (安全初始化)
     robot_controller = RobotController(urdf_path)
 
-    msg = JointState()
-    msg.header.stamp = rospy.Time.now()
-    msg.name = joint_names
-    msg.position = positions
-    msg.velocity = []
-    msg.effort = []
+    # msg = JointState()
+    # msg.header.stamp = rospy.Time.now()
+    # msg.name = joint_names
+    # msg.position = positions
+    # msg.velocity = []
+    # msg.effort = []
 
-    # Publish initial
-    print('Publishing initial JointState with %d joints from %s', len(joint_names), yaml_path)
-    pub.publish(msg)
+    # # Publish initial
+    # print('Publishing initial JointState with %d joints from %s', len(joint_names), yaml_path)
+    # pub.publish(msg)
     
     # 显示测试信息
     if robot_controller and robot_controller.is_enabled():
@@ -504,69 +504,63 @@ def main():
         print("Robot controller not available - only publishing joint states")
 
     hz = 20
-    rate = rospy.Rate(hz)  # 20 Hz
+    # rate = rospy.Rate(hz)  # 20 Hz
 
-    for i in range(1000):
-        msg.header.stamp = rospy.Time.now()       
+    for i in range(10):
+        # msg.header.stamp = rospy.Time.now()       
 
         if robot_controller is not None and robot_controller.is_enabled():
             if i % 2 == 0:  # 每20次迭代测试一次
                 # 首先获取当前末端位姿
-                end_effector_pose = robot_controller.get_end_effector_pose(msg.position)
+                end_effector_pose = robot_controller.get_end_effector_pose(joints)
                 
                 if end_effector_pose[0] is not None and end_effector_pose[1] is not None:
                     current_position, current_orientation = end_effector_pose
                     arm_type = "Left" if robot_controller.is_left_arm else "Right"
                     
-                    print("Iteration %d Current FK: %s arm EE pos [%.3f %.3f %.3f] quat [%.3f %.3f %.3f %.3f]", 
-                                i, arm_type, current_position[0], current_position[1], current_position[2],
-                                current_orientation[0], current_orientation[1], current_orientation[2], current_orientation[3])
+                    print(f"Iteration {i} Current FK: {arm_type} arm EE pos {current_position[0], current_position[1], current_position[2]} quat {current_orientation[0], current_orientation[1], current_orientation[2], current_orientation[3]}")
                     
                     # 设置目标位置
-                    target_position = current_position.copy()
-                    target_position[1] += 0.001
-                    current_orientation[3] += 0.001
+                    target_position = [-0.27602, 0.49937, 0.25269]
+                    target_orientation=[0.72002, 0.69395, -0.00039028, 0.0013282]
                     
-                    print("Target position: [%.3f %.3f %.3f]", 
-                                target_position[0], target_position[1], target_position[2])
+                    print(f"Target position:{target_position[0], target_position[1], target_position[2]}")
                     
                     # 使用IK求解到达目标位置所需的关节角度
                     success, new_joints, error, iterations = robot_controller.solve_ik(
                         target_position=target_position,
-                        target_orientation=current_orientation,  # 保持相同姿态
-                        initial_joints=msg.position,
+                        target_orientation=target_orientation,
+                        initial_joints=joints,
                         max_iters=100,  # 减少迭代次数以加快测试
                         tolerance=1e-3,  # 稍微放宽容差
                         DT=0.05  # 较小的步长
                     )
                     
                     if success:
-                        print("IK Success! Updating joint positions. Error: %.6f, Iterations: %d", error, iterations)
+                        print("====IK Success! Updating joint positions. Error: %.6f, Iterations: %d", error, iterations)
                         # 更新关节位置
-                        msg.position = list(new_joints)
+                        # msg.position = list(new_joints)
                         
                         # 验证新的FK结果
                         new_pose = robot_controller.get_end_effector_pose(new_joints)
                         if new_pose[0] is not None:
                             new_pos = new_pose[0]
                             achieved_error = np.linalg.norm(new_pos - target_position)
-                            print("Verification: achieved pos [%.3f %.3f %.3f], error: %.6f", 
-                                        new_pos[0], new_pos[1], new_pos[2], achieved_error)
+                            print(f"====Verification: achieved pos {new_pos[0], new_pos[1], new_pos[2]}, error: {achieved_error}")
                     else:
-                        print("IK Failed! Error: %.6f, Iterations: %d", error, iterations)
+                        print(f"IK Failed! Error: {error}, Iterations: {iterations}")
+                        print(f"New joints{new_joints}")
                               
+        # pub.publish(msg)
+        # rate.sleep()
+        # if rospy.is_shutdown():
+        #     return
 
 
-        pub.publish(msg)
-        rate.sleep()
-        if rospy.is_shutdown():
-            return
-
-
-    hold_time = rospy.get_param('~hold_seconds', 1.0)
-    print('Holding node alive for %.2f seconds...', hold_time)
-    rospy.sleep(hold_time)
-    print('Seed joint_states node exiting.')
+    # hold_time = rospy.get_param('~hold_seconds', 1.0)
+    # print('Holding node alive for %.2f seconds...', hold_time)
+    # rospy.sleep(hold_time)
+    # print('Seed joint_states node exiting.')
 
 if __name__ == '__main__':
     main()

@@ -253,34 +253,35 @@ class DETRVAE(nn.Module):
             transformer_input = torch.cat([qpos, env_state], axis=1) # seq length = 2
             hs = self.transformer(transformer_input, None, self.query_embed.weight, self.pos.weight)[0]
         if self.use_ee:
-            a_tmp = self.action_head(hs)
+            a_hat = self.action_head(hs)
             
-            # 左臂
-            pos_l = a_tmp[..., :3]          # (B, num_queries, 3)
-            rot6d_l = a_tmp[..., 3:9]       # (B, num_queries, 6)
-            grip_l = a_tmp[..., 9:10]       # (B, num_queries, 1)
-            # 6D -> R -> quat
-            rot6d_l = rot6d_l.reshape(-1, 6)         # (B*num_queries, 6)
-            R = self.rot6d_to_matrix(rot6d_l)           # (B*num_queries, 3, 3)
-            quat_l = self.matrix_to_quaternion(R)        # (B*num_queries, 4)
-            quat_l = quat_l.view(hs.shape[0], hs.shape[1], 4)  # reshape回 (B, num_queries, 4)
-            quat_l = quat_l[..., [3, 0, 1, 2]]  # 变成 (w,x,y,z)
+            # # 左臂
+            # pos_l = a_tmp[..., :3]          # (B, num_queries, 3)
+            # rot6d_l = a_tmp[..., 3:9]       # (B, num_queries, 6)
+            # grip_l = a_tmp[..., 9:10]       # (B, num_queries, 1)
+            # # 6D -> R -> quat
+            # rot6d_l = rot6d_l.reshape(-1, 6)         # (B*num_queries, 6)
+            # R = self.rot6d_to_matrix(rot6d_l)           # (B*num_queries, 3, 3)
+            # quat_l = self.matrix_to_quaternion(R)        # (B*num_queries, 4)
+            # quat_l = quat_l.view(hs.shape[0], hs.shape[1], 4)  # reshape回 (B, num_queries, 4)
+            # quat_l = quat_l[..., [3, 0, 1, 2]]  # 变成 (w,x,y,z)
 
-            # 右臂
-            pos_r = a_tmp[..., 10:13]
-            rot6d_r = a_tmp[..., 13:19]
-            grip_r = a_tmp[..., 19:20]
-            rot6d_r = rot6d_r.reshape(-1, 6)
-            R = self.rot6d_to_matrix(rot6d_r)
-            quat_r = self.matrix_to_quaternion(R)
-            quat_r = quat_r.view(hs.shape[0], hs.shape[1], 4)  # reshape回 (B, num_queries, 4)
-            quat_r = quat_r[..., [3, 0, 1, 2]]  # (w,x,y,z)
+            # # 右臂
+            # pos_r = a_tmp[..., 10:13]
+            # rot6d_r = a_tmp[..., 13:19]
+            # grip_r = a_tmp[..., 19:20]
+            # rot6d_r = rot6d_r.reshape(-1, 6)
+            # R = self.rot6d_to_matrix(rot6d_r)
+            # quat_r = self.matrix_to_quaternion(R)
+            # quat_r = quat_r.view(hs.shape[0], hs.shape[1], 4)  # reshape回 (B, num_queries, 4)
+            # quat_r = quat_r[..., [3, 0, 1, 2]]  # (w,x,y,z)
 
-            # zero数组
-            zeros = torch.zeros(hs.shape[0], hs.shape[1], 2, device=hs.device, dtype=hs.dtype)
+            # # zero数组
+            # zeros = torch.zeros(hs.shape[0], hs.shape[1], 2, device=hs.device, dtype=hs.dtype)
 
-            # 拼接成最终输出
-            a_hat = torch.cat([pos_l, quat_l, grip_l, pos_r, quat_r, grip_r, zeros], dim=-1)
+            # # 拼接成最终输出
+            # a_hat = torch.cat([pos_l, quat_l, grip_l, pos_r, quat_r, grip_r, zeros], dim=-1)
+
         else:
             a_hat = self.action_head(hs)
         is_pad_hat = self.is_pad_head(hs)

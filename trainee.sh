@@ -1,0 +1,1 @@
+python imitate_episodes.py --task_name sim_transfer_cube_ee --ckpt_dir ckpt/act4 --policy_class ACT --kl_weight 10 --chunk_size 100 --hidden_dim 512 --batch_size 8 --dim_feedforward 3200 --num_steps 10000 --lr 1e-5 --seed 0 --use_ee --load_pretrain

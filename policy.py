@@ -33,8 +33,9 @@ class DiffusionPolicy(nn.Module):
 
         self.num_kp = 32
         self.feature_dimension = 64
-        self.ac_dim = args_override['action_dim'] # 14 + 2
-        self.obs_dim = self.feature_dimension * len(self.camera_names) + 14 # camera features and proprio
+        self.ac_dim = args_override['action_dim']
+        self.state_dim = args_override['state_dim'] # get from config instead of hardcoding
+        self.obs_dim = self.feature_dimension * len(self.camera_names) + self.state_dim # camera features and proprio
 
         backbones = []
         pools = []
@@ -67,7 +68,7 @@ class DiffusionPolicy(nn.Module):
         nets = nets.float().cuda()
         ENABLE_EMA = True
         if ENABLE_EMA:
-            ema = EMAModel(model=nets, power=self.ema_power)
+            ema = EMAModel(parameters=nets.parameters(), power=self.ema_power)
         else:
             ema = None
         self.nets = nets
@@ -143,7 +144,10 @@ class DiffusionPolicy(nn.Module):
             
             nets = self.nets
             if self.ema is not None:
-                nets = self.ema.averaged_model
+                # 创建临时模型副本并应用EMA参数
+                import copy
+                nets = copy.deepcopy(self.nets)
+                self.ema.copy_to(nets.parameters())
             
             all_features = []
             for cam_id in range(len(self.camera_names)):
@@ -184,7 +188,7 @@ class DiffusionPolicy(nn.Module):
     def serialize(self):
         return {
             "nets": self.nets.state_dict(),
-            "ema": self.ema.averaged_model.state_dict() if self.ema is not None else None,
+            "ema": self.ema.state_dict() if self.ema is not None else None,
         }
 
     def deserialize(self, model_dict):
@@ -192,7 +196,7 @@ class DiffusionPolicy(nn.Module):
         print('Loaded model')
         if model_dict.get("ema", None) is not None:
             print('Loaded EMA')
-            status_ema = self.ema.averaged_model.load_state_dict(model_dict["ema"])
+            status_ema = self.ema.load_state_dict(model_dict["ema"])
             status = [status, status_ema]
         return status
 
@@ -204,6 +208,7 @@ class ACTPolicy(nn.Module):
         self.optimizer = optimizer
         self.kl_weight = args_override['kl_weight']
         self.vq = args_override['vq']
+        self.use_ee = args_override['use_ee']
         print(f'KL Weight {self.kl_weight}')
 
     def __call__(self, qpos, image, actions=None, is_pad=None, vq_sample=None):
@@ -224,14 +229,90 @@ class ACTPolicy(nn.Module):
                 total_kld, dim_wise_kld, mean_kld = kl_divergence(mu, logvar)
             if self.vq:
                 loss_dict['vq_discrepancy'] = F.l1_loss(probs, binaries, reduction='mean')
-            all_l1 = F.l1_loss(actions, a_hat, reduction='none')
-            l1 = (all_l1 * ~is_pad.unsqueeze(-1)).mean()
-            loss_dict['l1'] = l1
-            loss_dict['kl'] = total_kld[0]
-            loss_dict['loss'] = loss_dict['l1'] + loss_dict['kl'] * self.kl_weight
-            return loss_dict
+
+            if self.use_ee:
+                # 左臂
+                pos_l = a_hat[..., :3]          # (B, num_queries, 3)
+                rot6d_l = a_hat[..., 3:9]       # (B, num_queries, 6)
+                grip_l = a_hat[..., 9:10]       # (B, num_queries, 1)
+                # 6D -> R
+                rot6d_l = rot6d_l.reshape(-1, 6)         # (B*num_queries, 6)
+                R_l = self.rot6d_to_matrix(rot6d_l)           # (B*num_queries, 3, 3)
+
+                # 右臂
+                pos_r = a_hat[..., 10:13]
+                rot6d_r = a_hat[..., 13:19]
+                grip_r = a_hat[..., 19:20]
+                rot6d_r = rot6d_r.reshape(-1, 6)
+                R_r = self.rot6d_to_matrix(rot6d_r)
+
+                # 左臂 GT
+                pos_l_gt   = actions[..., :3]
+                quat_l_gt  = actions[..., 3:7]
+                grip_l_gt  = actions[..., 7:8]
+                # 右臂 GT
+                pos_r_gt   = actions[..., 8:11]
+                quat_r_gt  = actions[..., 11:15]
+                grip_r_gt  = actions[..., 15:16]
+                R_l_gt = self.quat_to_matrix(quat_l_gt.reshape(-1, 4))
+                R_r_gt = self.quat_to_matrix(quat_r_gt.reshape(-1, 4))
+
+                # pos loss
+                loss_pos = F.l1_loss(pos_l, pos_l_gt) + F.l1_loss(pos_r, pos_r_gt)
+
+                # gripper loss
+                loss_grip = F.l1_loss(grip_l, grip_l_gt) + F.l1_loss(grip_r, grip_r_gt)
+
+                # rot loss (Frobenius norm)
+                loss_rot = self.rotation_matrix_loss(R_l, R_l_gt) + \
+                        self.rotation_matrix_loss(R_r, R_r_gt)
+
+                # 总损失
+                loss_dict['pos'] = loss_pos
+                loss_dict['rot'] = loss_rot*20
+                loss_dict['grip']= loss_grip
+                all_l1 = loss_dict['pos'] + loss_dict['rot'] + loss_dict['grip']
+                l1 = (all_l1 * ~is_pad.unsqueeze(-1)).mean()
+                loss_dict['l1'] = l1
+                loss_dict['kl'] = total_kld[0]
+                loss_dict['loss'] = loss_dict['l1'] + loss_dict['kl'] * self.kl_weight
+
+                return loss_dict
+            else:
+                all_l1 = F.l1_loss(actions, a_hat, reduction='none')
+                l1 = (all_l1 * ~is_pad.unsqueeze(-1)).mean()
+                loss_dict['l1'] = l1
+                loss_dict['kl'] = total_kld[0]
+                loss_dict['loss'] = loss_dict['l1'] + loss_dict['kl'] * self.kl_weight
+                return loss_dict
         else: # inference time
             a_hat, _, (_, _), _, _ = self.model(qpos, image, env_state, vq_sample=vq_sample) # no action, sample from prior
+            if self.use_ee:
+                # 左臂
+                pos_l = a_hat[..., :3]          # (B, num_queries, 3)
+                rot6d_l = a_hat[..., 3:9]       # (B, num_queries, 6)
+                grip_l = a_hat[..., 9:10]       # (B, num_queries, 1)
+                # 6D -> R -> quat
+                rot6d_l = rot6d_l.reshape(-1, 6)         # (B*num_queries, 6)
+                R_l = self.rot6d_to_matrix(rot6d_l)           # (B*num_queries, 3, 3)
+                quat_l = self.matrix_to_quaternion(R_l)        # (B*num_queries, 4)
+                quat_l = quat_l.view(a_hat.shape[0], a_hat.shape[1], 4)  # reshape回 (B, num_queries, 4)
+                quat_l = quat_l[..., [3, 0, 1, 2]]  # 变成 (w,x,y,z)
+
+                # 右臂
+                pos_r = a_hat[..., 10:13]
+                rot6d_r = a_hat[..., 13:19]
+                grip_r = a_hat[..., 19:20]
+                rot6d_r = rot6d_r.reshape(-1, 6)
+                R_r = self.rot6d_to_matrix(rot6d_r)
+                quat_r = self.matrix_to_quaternion(R_r)
+                quat_r = quat_r.view(a_hat.shape[0], a_hat.shape[1], 4)  # reshape回 (B, num_queries, 4)
+                quat_r = quat_r[..., [3, 0, 1, 2]]  # (w,x,y,z)
+
+                zeros = torch.zeros(a_hat.shape[0], a_hat.shape[1], 2, device=a_hat.device, dtype=a_hat.dtype)
+
+                a_hat = torch.cat([pos_l, quat_l, grip_l, pos_r, quat_r, grip_r, zeros], dim=-1)
+
             return a_hat
 
     def configure_optimizers(self):
@@ -252,6 +333,98 @@ class ACTPolicy(nn.Module):
 
     def deserialize(self, model_dict):
         return self.load_state_dict(model_dict)
+    
+    @staticmethod
+    def quat_to_matrix(quat):
+        """
+        quat: (B, 4) normalized quaternion
+        return: (B, 3, 3) rotation matrix
+        """
+        quat = F.normalize(quat, dim=-1)
+        w, x, y, z = quat[:, 0], quat[:, 1], quat[:, 2], quat[:, 3]
+
+        B = quat.size(0)
+        R = torch.zeros((B, 3, 3), device=quat.device)
+        R[:, 0, 0] = 1 - 2*(y**2 + z**2)
+        R[:, 0, 1] = 2*(x*y - z*w)
+        R[:, 0, 2] = 2*(x*z + y*w)
+        R[:, 1, 0] = 2*(x*y + z*w)
+        R[:, 1, 1] = 1 - 2*(x**2 + z**2)
+        R[:, 1, 2] = 2*(y*z - x*w)
+        R[:, 2, 0] = 2*(x*z - y*w)
+        R[:, 2, 1] = 2*(y*z + x*w)
+        R[:, 2, 2] = 1 - 2*(x**2 + y**2)
+        return R
+
+    
+    @staticmethod
+    def rotation_matrix_loss(R_pred, R_gt):
+        # R_pred, R_gt: (B, 3, 3)
+        loss = torch.norm(R_pred - R_gt, dim=(1,2))  # Frobenius norm
+        return loss.mean()
+    
+    @staticmethod
+    def rot6d_to_matrix(x):
+        """
+        Convert 6D rotation representation to 3x3 rotation matrix.
+        Input: (B, 6) tensor
+        Output: (B, 3, 3) rotation matrix
+        """
+        x = x.view(-1, 6)
+        a1 = x[:, 0:3]
+        a2 = x[:, 3:6]
+
+        def normalize_vector(v, eps=1e-8):
+            """ Normalize a batch of vectors """
+            return v / (torch.norm(v, dim=-1, keepdim=True) + eps)
+        b1 = normalize_vector(a1)
+        b2 = normalize_vector(a2 - torch.sum(b1 * a2, dim=1, keepdim=True) * b1)
+        b3 = torch.cross(b1, b2, dim=1)
+
+        return torch.stack([b1, b2, b3], dim=-1)  # (B, 3, 3)
+
+    @staticmethod
+    def matrix_to_quaternion(R):
+        """
+        Convert rotation matrix to quaternion.
+        Input: (B, 3, 3)
+        Output: (B, 4) quaternions (x, y, z, w)
+        """
+        B = R.shape[0]
+        quat = torch.zeros(B, 4, device=R.device)
+
+        trace = R[:, 0, 0] + R[:, 1, 1] + R[:, 2, 2]
+        for i in range(B):
+            if trace[i] > 0:
+                s = torch.sqrt(trace[i] + 1.0) * 2
+                quat[i, 3] = 0.25 * s
+                quat[i, 0] = (R[i, 2, 1] - R[i, 1, 2]) / s
+                quat[i, 1] = (R[i, 0, 2] - R[i, 2, 0]) / s
+                quat[i, 2] = (R[i, 1, 0] - R[i, 0, 1]) / s
+            else:
+                # fallback cases, see: https://en.wikipedia.org/wiki/Rotation_matrix#Quaternion
+                if (R[i, 0, 0] > R[i, 1, 1]) and (R[i, 0, 0] > R[i, 2, 2]):
+                    s = torch.sqrt(1.0 + R[i, 0, 0] - R[i, 1, 1] - R[i, 2, 2]) * 2
+                    quat[i, 3] = (R[i, 2, 1] - R[i, 1, 2]) / s
+                    quat[i, 0] = 0.25 * s
+                    quat[i, 1] = (R[i, 0, 1] + R[i, 1, 0]) / s
+                    quat[i, 2] = (R[i, 0, 2] + R[i, 2, 0]) / s
+                elif R[i, 1, 1] > R[i, 2, 2]:
+                    s = torch.sqrt(1.0 + R[i, 1, 1] - R[i, 0, 0] - R[i, 2, 2]) * 2
+                    quat[i, 3] = (R[i, 0, 2] - R[i, 2, 0]) / s
+                    quat[i, 0] = (R[i, 0, 1] + R[i, 1, 0]) / s
+                    quat[i, 1] = 0.25 * s
+                    quat[i, 2] = (R[i, 1, 2] + R[i, 2, 1]) / s
+                else:
+                    s = torch.sqrt(1.0 + R[i, 2, 2] - R[i, 0, 0] - R[i, 1, 1]) * 2
+                    quat[i, 3] = (R[i, 1, 0] - R[i, 0, 1]) / s
+                    quat[i, 0] = (R[i, 0, 2] + R[i, 2, 0]) / s
+                    quat[i, 1] = (R[i, 1, 2] + R[i, 2, 1]) / s
+                    quat[i, 2] = 0.25 * s
+
+        # Normalize to unit quaternion
+        quat = F.normalize(quat, dim=-1)
+        return quat
 
 
 class CNNMLPPolicy(nn.Module):
@@ -280,6 +453,33 @@ class CNNMLPPolicy(nn.Module):
 
     def configure_optimizers(self):
         return self.optimizer
+
+def normalize_quaternion(quat):
+    """
+    归一化四元数
+    quat: (..., 4) tensor，四元数格式为 [w, x, y, z]
+    """
+    return F.normalize(quat, p=2, dim=-1)
+
+def quaternion_dot_loss(pred_quat, target_quat):
+    """
+    计算四元数的点乘损失
+    pred_quat: 预测的四元数 (..., 4)
+    target_quat: 目标四元数 (..., 4)
+    """
+    # 归一化四元数
+    pred_quat_norm = normalize_quaternion(pred_quat)
+    target_quat_norm = normalize_quaternion(target_quat)
+    
+    # 计算点乘 (cosine similarity)
+    dot_product = torch.sum(pred_quat_norm * target_quat_norm, dim=-1)
+    
+    # 由于四元数q和-q代表相同的旋转，取绝对值
+    dot_product = torch.abs(dot_product)
+    
+    # 损失函数：1 - |dot_product| (越接近1越好)
+    loss = 1.0 - dot_product
+    return loss.mean()
 
 def kl_divergence(mu, logvar):
     batch_size = mu.size(0)
