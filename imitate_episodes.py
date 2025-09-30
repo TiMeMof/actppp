@@ -12,7 +12,7 @@ import wandb
 import time
 from torchvision import transforms
 from show_ws.src.arm_robot_description.scripts.seed_joint_states import RobotController
-
+import copy
 
 from constants import FPS
 from constants import PUPPET_GRIPPER_JOINT_OPEN
@@ -194,13 +194,13 @@ def main(args):
     wandb.finish()
 
 
-def make_policy(policy_class, policy_config):
+def make_policy(policy_class, policy_config, device):
     if policy_class == 'ACT':
         policy = ACTPolicy(policy_config)
     elif policy_class == 'CNNMLP':
         policy = CNNMLPPolicy(policy_config)
     elif policy_class == 'Diffusion':
-        policy = DiffusionPolicy(policy_config)
+        policy = DiffusionPolicy(policy_config, device)
     else:
         raise NotImplementedError
     return policy
@@ -257,13 +257,16 @@ def eval_bc(config, ckpt_name, save_episode=True, num_rollouts=50):
     vq = config['policy_config']['vq']
     actuator_config = config['actuator_config']
     use_actuator_net = actuator_config['actuator_network_dir'] is not None
+    last_action = None
+    first_action = True
 
     left_arm_controller = RobotController('/home/moyufan/actppp/show_ws/src/arm_robot_description/urdf_act/vx300s_left.urdf')
     right_arm_controller = RobotController('/home/moyufan/actppp/show_ws/src/arm_robot_description/urdf_act/vx300s_right.urdf')
 
     # load policy and stats
     ckpt_path = os.path.join(ckpt_dir, ckpt_name)
-    policy = make_policy(policy_class, policy_config)
+    device = torch.device('cuda:3' if torch.cuda.is_available() else 'cpu')
+    policy = make_policy(policy_class, policy_config, device)
     loading_status = policy.deserialize(torch.load(ckpt_path))
     print(loading_status)
     policy.cuda()
@@ -324,6 +327,7 @@ def eval_bc(config, ckpt_name, save_episode=True, num_rollouts=50):
         env_max_reward = env.task.max_reward
 
     query_frequency = policy_config['num_queries']
+    query_frequency = 1
     if temporal_agg:
         query_frequency = 1
         num_queries = policy_config['num_queries']
@@ -358,7 +362,7 @@ def eval_bc(config, ckpt_name, save_episode=True, num_rollouts=50):
 
         ### evaluation loop
         if temporal_agg:
-            all_time_actions = torch.zeros([max_timesteps, max_timesteps+num_queries, 16]).cuda()
+            all_time_actions = torch.zeros([max_timesteps, max_timesteps+num_queries, config['policy_config']['action_dim']]).cuda()
 
         # qpos_history = torch.zeros((1, max_timesteps, state_dim)).cuda()
         qpos_history_raw = np.zeros((max_timesteps, state_dim))
@@ -451,7 +455,28 @@ def eval_bc(config, ckpt_name, save_episode=True, num_rollouts=50):
                         exp_weights = np.exp(-k * np.arange(len(actions_for_curr_step)))
                         exp_weights = exp_weights / exp_weights.sum()
                         exp_weights = torch.from_numpy(exp_weights).cuda().unsqueeze(dim=1)
-                        raw_action = (actions_for_curr_step * exp_weights).sum(dim=0, keepdim=True)
+                        # raw_action = (actions_for_curr_step * exp_weights).sum(dim=0, keepdim=True)
+                        if not first_action:
+                            last_action = copy.deepcopy(raw_action)
+                        # raw_action = (actions_for_curr_step * exp_weights).sum(dim=0, keepdim=True)
+                        raw_action = all_actions[:, t % query_frequency]
+                        if first_action:
+                            last_action = copy.deepcopy(raw_action)
+                            first_action = False
+
+                        # 如果raw_action和last_action差距过大，就限制此次变化在一个范围内
+                        if last_action is not None:
+                            # 检测last_action是否为tensor
+                            if not isinstance(last_action, torch.Tensor):
+                                last_action = torch.from_numpy(last_action).float().cuda().unsqueeze(0)
+                            # 检测raw_action是否为tensor
+                            if not isinstance(raw_action, torch.Tensor):
+                                raw_action = torch.from_numpy(raw_action).float().cuda().unsqueeze(0)
+                            max_delta = 0.05
+                            delta = raw_action - last_action
+                            print("delta: ", delta)
+                            delta = torch.clamp(delta, -max_delta, max_delta)
+                            raw_action = last_action + delta
                     else:
                         raw_action = all_actions[:, t % query_frequency]
                         # if t % query_frequency == query_frequency - 1:
@@ -464,7 +489,39 @@ def eval_bc(config, ckpt_name, save_episode=True, num_rollouts=50):
                         #     collect_base_action(all_actions, norm_episode_all_base_actions)
                         if real_robot:
                             all_actions = torch.cat([all_actions[:, :-BASE_DELAY, :-2], all_actions[:, BASE_DELAY:, -2:]], dim=2)
-                    raw_action = all_actions[:, t % query_frequency]
+                    if temporal_agg:
+                        # Diffusion 策略的时间聚合加权滤波
+                        all_time_actions[[t], t:t+num_queries] = all_actions
+                        actions_for_curr_step = all_time_actions[:, t]
+                        actions_populated = torch.all(actions_for_curr_step != 0, axis=1)
+                        actions_for_curr_step = actions_for_curr_step[actions_populated]
+                        k = 0.01
+                        exp_weights = np.exp(-k * np.arange(len(actions_for_curr_step)))
+                        exp_weights = exp_weights / exp_weights.sum()
+                        exp_weights = torch.from_numpy(exp_weights).cuda().unsqueeze(dim=1)
+                        if not first_action:
+                            last_action = copy.deepcopy(raw_action)
+                        # raw_action = (actions_for_curr_step * exp_weights).sum(dim=0, keepdim=True)
+                        raw_action = all_actions[:, t % query_frequency]
+                        if first_action:
+                            last_action = copy.deepcopy(raw_action)
+                            first_action = False
+
+                        # 如果raw_action和last_action差距过大，就限制此次变化在一个范围内
+                        if last_action is not None:
+                            # 检测last_action是否为tensor
+                            if not isinstance(last_action, torch.Tensor):
+                                last_action = torch.from_numpy(last_action).float().cuda().unsqueeze(0)
+                            # 检测raw_action是否为tensor
+                            if not isinstance(raw_action, torch.Tensor):
+                                raw_action = torch.from_numpy(raw_action).float().cuda().unsqueeze(0)
+                            max_delta = 0.05
+                            delta = raw_action - last_action
+                            print("delta: ", delta)
+                            delta = torch.clamp(delta, -max_delta, max_delta)
+                            raw_action = last_action + delta
+                    else:
+                        raw_action = all_actions[:, t % query_frequency]
                 elif config['policy_class'] == "CNNMLP":
                     raw_action = policy(qpos, curr_image)
                     all_actions = raw_action.unsqueeze(0)
@@ -594,9 +651,9 @@ def eval_bc(config, ckpt_name, save_episode=True, num_rollouts=50):
     return success_rate, avg_return
 
 
-def forward_pass(data, policy):
+def forward_pass(data, policy, device):
     image_data, qpos_data, action_data, is_pad = data
-    image_data, qpos_data, action_data, is_pad = image_data.cuda(), qpos_data.cuda(), action_data.cuda(), is_pad.cuda()
+    image_data, qpos_data, action_data, is_pad = image_data.to(device), qpos_data.to(device), action_data.to(device), is_pad.to(device)
     return policy(qpos_data, image_data, action_data, is_pad) # TODO remove None
 
 
@@ -611,15 +668,16 @@ def train_bc(train_dataloader, val_dataloader, config):
     save_every = config['save_every']
 
     set_seed(seed)
-
-    policy = make_policy(policy_class, policy_config)
+    device = torch.device('cuda:3' if torch.cuda.is_available() else 'cpu')
+    policy = make_policy(policy_class, policy_config, device)
     if config['load_pretrain']:
-        loading_status = policy.deserialize(torch.load(os.path.join('/home/moyufan/actppp/ckpt/act4', 'policy_best.ckpt')))
+        loading_status = policy.deserialize(torch.load(os.path.join('/home/moyufan/actppp/ckpt/diffusion', 'policy_best.ckpt')))
         print(f'loaded! {loading_status}')
     if config['resume_ckpt_path'] is not None:
         loading_status = policy.deserialize(torch.load(config['resume_ckpt_path']))
         print(f'Resume policy from: {config["resume_ckpt_path"]}, Status: {loading_status}')
-    policy.cuda()
+    # policy.cuda()
+    policy.to(device=device)
     optimizer = make_optimizer(policy_class, policy)
 
     min_val_loss = np.inf
@@ -635,7 +693,7 @@ def train_bc(train_dataloader, val_dataloader, config):
                 policy.eval()
                 validation_dicts = []
                 for batch_idx, data in enumerate(val_dataloader):
-                    forward_dict = forward_pass(data, policy)
+                    forward_dict = forward_pass(data, policy, device)
                     validation_dicts.append(forward_dict)
                     if batch_idx > 50:
                         break
@@ -668,7 +726,7 @@ def train_bc(train_dataloader, val_dataloader, config):
         policy.train()
         optimizer.zero_grad()
         data = next(train_dataloader)
-        forward_dict = forward_pass(data, policy)
+        forward_dict = forward_pass(data, policy, device)
         # backward
         loss = forward_dict['loss']
         loss.backward()

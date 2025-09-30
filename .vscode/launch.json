@@ -19,11 +19,11 @@
                 "--dataset_dir",
                 "data/sim_transfer_cube_ee",
                 "--num_episodes",
-                "50"
+                "200"
             ]
         },
         {
-            "name": "eval---imitate_episodes",
+            "name": "eval",
             "type": "debugpy",
             "request": "launch",
             "program": "${workspaceFolder}/imitate_episodes.py",
@@ -58,7 +58,7 @@
             ]
         },
         {
-            "name": "eval ee---imitate_episodes",
+            "name": "eval ee",
             "type": "debugpy",
             "request": "launch",
             "program": "${workspaceFolder}/imitate_episodes.py",
@@ -90,11 +90,45 @@
                 "1e-5",
                 "--seed",
                 "0",
-                "--use_ee"
+                "--use_ee",
+                "--temporal_agg"
             ]
         },
         {
-            "name": "train ee---imitate_episodes",
+            "name": "eval ee diffusion",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/imitate_episodes.py",
+            "console": "integratedTerminal",
+            "env": {
+                "MUJOCO_GL": "egl" // 添加环境变量
+            },
+            "args": [
+                "--eval",
+                "--task_name",
+                "sim_transfer_cube_ee",
+                "--ckpt_dir",
+                "ckpt/diffusion2",
+                "--policy_class",
+                "Diffusion",
+                "--kl_weight",
+                "10",
+                "--chunk_size",
+                "20",
+                "--batch_size",
+                "8",
+                "--num_steps",
+                "20000",
+                "--lr",
+                "1e-5",
+                "--seed",
+                "0",
+                "--use_ee",
+                "--temporal_agg"
+            ]
+        },
+        {
+            "name": "train ee",
             "type": "debugpy",
             "request": "launch",
             "program": "${workspaceFolder}/imitate_episodes.py",
@@ -130,7 +164,7 @@
             ]
         },
         {
-            "name": "train ee diffusion---imitate_episodes",
+            "name": "train ee diffusion",
             "type": "debugpy",
             "request": "launch",
             "program": "${workspaceFolder}/imitate_episodes.py",
@@ -142,7 +176,7 @@
                 "--task_name",
                 "sim_transfer_cube_ee",
                 "--ckpt_dir",
-                "ckpt/diffusion",
+                "ckpt/diffusion2",
                 "--policy_class",
                 "Diffusion",
                 "--kl_weight",
@@ -162,6 +196,7 @@
                 "--seed",
                 "0",
                 "--use_ee",
+                // "--load_pretrain"
             ]
         }
     ]

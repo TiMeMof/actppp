@@ -18,7 +18,7 @@ from diffusers.training_utils import EMAModel
 
 
 class DiffusionPolicy(nn.Module):
-    def __init__(self, args_override):
+    def __init__(self, args_override, device):
         super().__init__()
 
         self.camera_names = args_override['camera_names']
@@ -36,6 +36,8 @@ class DiffusionPolicy(nn.Module):
         self.ac_dim = args_override['action_dim']
         self.state_dim = args_override['state_dim'] # get from config instead of hardcoding
         self.obs_dim = self.feature_dimension * len(self.camera_names) + self.state_dim # camera features and proprio
+        self.use_ee = args_override.get('use_ee', False)
+        self.structured_loss_weight = 18
 
         backbones = []
         pools = []
@@ -51,9 +53,15 @@ class DiffusionPolicy(nn.Module):
         backbones = replace_bn_with_gn(backbones) # TODO
 
 
+        # 如果是end-effector模式，网络处理20维 (3+6+1)*2，输入18维转换成20维
+        network_ac_dim = self.ac_dim + 2 if self.use_ee else self.ac_dim
         noise_pred_net = ConditionalUnet1D(
-            input_dim=self.ac_dim,
+            input_dim=network_ac_dim,
             global_cond_dim=self.obs_dim*self.observation_horizon
+            ,diffusion_step_embed_dim=1024,
+            down_dims=[1024,2048,4096],
+            kernel_size=5,
+            n_groups=128
         )
 
         nets = nn.ModuleDict({
@@ -65,10 +73,14 @@ class DiffusionPolicy(nn.Module):
             })
         })
 
-        nets = nets.float().cuda()
+        nets = nets.float().to(device=device)
         ENABLE_EMA = True
         if ENABLE_EMA:
+            # 传入parameters而不是整个模型，并确保在正确设备上
             ema = EMAModel(parameters=nets.parameters(), power=self.ema_power)
+            # 手动移动shadow_params到正确设备
+            # ema.to(device)
+            # ema.shadow_params = [p.to(device) for p in ema.shadow_params]
         else:
             ema = None
         self.nets = nets
@@ -108,39 +120,76 @@ class DiffusionPolicy(nn.Module):
 
             obs_cond = torch.cat(all_features + [qpos], dim=1)
 
-            # sample noise to add to actions
-            noise = torch.randn(actions.shape, device=obs_cond.device)
-            
-            # sample a diffusion iteration for each data point
-            timesteps = torch.randint(
-                0, self.noise_scheduler.config.num_train_timesteps, 
-                (B,), device=obs_cond.device
-            ).long()
-            
-            # add noise to the clean actions according to the noise magnitude at each diffusion iteration
-            # (this is the forward diffusion process)
-            noisy_actions = self.noise_scheduler.add_noise(
-                actions, noise, timesteps)
-            
-            # predict the noise residual
-            noise_pred = nets['policy']['noise_pred_net'](noisy_actions, timesteps, global_cond=obs_cond)
-            
-            # L2 loss
-            all_l2 = F.mse_loss(noise_pred, noise, reduction='none')
-            loss = (all_l2 * ~is_pad.unsqueeze(-1)).mean()
-
-            loss_dict = {}
-            loss_dict['l2_loss'] = loss
-            loss_dict['loss'] = loss
+            if self.use_ee:
+                # 转换输入：从 (3pos+4quat+1grip)*2+2zeros 到 (3pos+6d+1grip)*2 
+                actions_6d = self.convert_quat_to_6d_format(actions)
+                noise = torch.randn(actions_6d.shape, device=obs_cond.device)
+                
+                timesteps = torch.randint(
+                    0, self.noise_scheduler.config.num_train_timesteps, 
+                    (B,), device=obs_cond.device
+                ).long()
+                
+                # add noise to the clean actions
+                noisy_actions = self.noise_scheduler.add_noise(actions_6d, noise, timesteps)
+                
+                # predict the noise residual
+                noise_pred = nets['policy']['noise_pred_net'](noisy_actions, timesteps, global_cond=obs_cond)
+                
+                # 基础噪声损失
+                all_l2 = F.mse_loss(noise_pred, noise, reduction='none')
+                noise_loss = (all_l2 * ~is_pad.unsqueeze(-1)).mean()
+                
+                # 结构化损失：将预测噪声转换回姿态空间计算损失
+                structured_loss = self.compute_structured_noise_loss(noise_pred, noise, is_pad)
+                
+                total_loss = noise_loss + self.structured_loss_weight * structured_loss
+                
+                loss_dict = {
+                    'l2_loss': noise_loss,
+                    'structured_loss': structured_loss,
+                    'loss': total_loss
+                }
+            else:
+                # 原始模式：不做特殊处理
+                noise = torch.randn(actions.shape, device=obs_cond.device)
+                timesteps = torch.randint(
+                    0, self.noise_scheduler.config.num_train_timesteps, 
+                    (B,), device=obs_cond.device
+                ).long()
+                
+                noisy_actions = self.noise_scheduler.add_noise(actions, noise, timesteps)
+                noise_pred = nets['policy']['noise_pred_net'](noisy_actions, timesteps, global_cond=obs_cond)
+                
+                all_l2 = F.mse_loss(noise_pred, noise, reduction='none')
+                loss = (all_l2 * ~is_pad.unsqueeze(-1)).mean()
+                
+                loss_dict = {
+                    'l2_loss': loss,
+                    'loss': loss
+                }
 
             if self.training and self.ema is not None:
-                self.ema.step(nets)
+                # self.ema.step(nets)
+                try:
+                    # 获取模型参数的设备
+                    model_device = next(nets.parameters()).device
+                    # 将EMA参数临时移动到模型设备（如果需要）
+                    if self.ema.shadow_params and self.ema.shadow_params[0].device != model_device:
+                        self.ema.to(model_device)
+                    self.ema.step(nets)
+                except RuntimeError as e:
+                    if "device" in str(e):
+                        print(f"EMA device error: {e}")
+                        # 暂时跳过EMA更新
+                        pass
+                    else:
+                        raise e
             return loss_dict
         else: # inference time
             To = self.observation_horizon
             Ta = self.action_horizon
             Tp = self.prediction_horizon
-            action_dim = self.ac_dim
             
             nets = self.nets
             if self.ema is not None:
@@ -160,30 +209,54 @@ class DiffusionPolicy(nn.Module):
 
             obs_cond = torch.cat(all_features + [qpos], dim=1)
 
-            # initialize action from Guassian noise
-            noisy_action = torch.randn(
-                (B, Tp, action_dim), device=obs_cond.device)
-            naction = noisy_action
-            
-            # init scheduler
-            self.noise_scheduler.set_timesteps(self.num_inference_timesteps)
+            if self.use_ee:
+                # 在网络内部维度为20维的空间中进行去噪
+                network_action_dim = self.ac_dim + 2  # 20维
+                noisy_action = torch.randn((B, Tp, network_action_dim), device=obs_cond.device)
+                naction = noisy_action
+                
+                # init scheduler
+                self.noise_scheduler.set_timesteps(self.num_inference_timesteps)
 
-            for k in self.noise_scheduler.timesteps:
-                # predict noise
-                noise_pred = nets['policy']['noise_pred_net'](
-                    sample=naction, 
-                    timestep=k,
-                    global_cond=obs_cond
-                )
+                for k in self.noise_scheduler.timesteps:
+                    # predict noise
+                    noise_pred = nets['policy']['noise_pred_net'](
+                        sample=naction, 
+                        timestep=k,
+                        global_cond=obs_cond
+                    )
 
-                # inverse diffusion step (remove noise)
-                naction = self.noise_scheduler.step(
-                    model_output=noise_pred,
-                    timestep=k,
-                    sample=naction
-                ).prev_sample
+                    # inverse diffusion step (remove noise)
+                    naction = self.noise_scheduler.step(
+                        model_output=noise_pred,
+                        timestep=k,
+                        sample=naction
+                    ).prev_sample
 
-            return naction
+                # 转换回原始格式：(3pos+6d+1grip)*2 -> (3pos+4quat+1grip)*2+2zeros
+                return self.convert_6d_to_quat_format(naction)
+            else:
+                # 原始模式
+                action_dim = self.ac_dim
+                noisy_action = torch.randn((B, Tp, action_dim), device=obs_cond.device)
+                naction = noisy_action
+                
+                # init scheduler
+                self.noise_scheduler.set_timesteps(self.num_inference_timesteps)
+
+                for k in self.noise_scheduler.timesteps:
+                    noise_pred = nets['policy']['noise_pred_net'](
+                        sample=naction, 
+                        timestep=k,
+                        global_cond=obs_cond
+                    )
+                    naction = self.noise_scheduler.step(
+                        model_output=noise_pred,
+                        timestep=k,
+                        sample=naction
+                    ).prev_sample
+
+                return naction
 
     def serialize(self):
         return {
@@ -199,6 +272,168 @@ class DiffusionPolicy(nn.Module):
             status_ema = self.ema.load_state_dict(model_dict["ema"])
             status = [status, status_ema]
         return status
+    
+    def convert_quat_to_6d_format(self, actions):
+        """
+        转换输入格式：从 (3pos+4quat+1grip)*2+2zeros 到 (3pos+6d+1grip)*2
+        actions: [B, T, 18] -> [B, T, 20]
+        """
+        B, T = actions.shape[:2]
+        
+        # 去掉末尾2个零维度
+        actions_no_zeros = actions[..., :-2]  # [B, T, 16]
+        
+        # 左臂
+        pos_l = actions_no_zeros[..., :3]
+        quat_l = actions_no_zeros[..., 3:7]  # wxyz
+        grip_l = actions_no_zeros[..., 7:8]
+        
+        # 右臂  
+        pos_r = actions_no_zeros[..., 8:11]
+        quat_r = actions_no_zeros[..., 11:15]  # wxyz
+        grip_r = actions_no_zeros[..., 15:16]
+        
+        # 四元数转6D表示
+        rot6d_l = self.quat_to_6d(quat_l)
+        rot6d_r = self.quat_to_6d(quat_r)
+        
+        # 拼接成 (3+6+1)*2 = 20维
+        actions_6d = torch.cat([
+            pos_l, rot6d_l, grip_l,  # 左臂 10维
+            pos_r, rot6d_r, grip_r   # 右臂 10维
+        ], dim=-1)
+        
+        return actions_6d
+        
+    def convert_6d_to_quat_format(self, actions_6d):
+        """
+        转换输出格式：从 (3pos+6d+1grip)*2 到 (3pos+4quat+1grip)*2+2zeros
+        actions_6d: [B, T, 20] -> [B, T, 18]
+        """
+        B, T = actions_6d.shape[:2]
+        
+        # 左臂
+        pos_l = actions_6d[..., :3]
+        rot6d_l = actions_6d[..., 3:9]
+        grip_l = actions_6d[..., 9:10]
+        
+        # 右臂
+        pos_r = actions_6d[..., 10:13]
+        rot6d_r = actions_6d[..., 13:19]
+        grip_r = actions_6d[..., 19:20]
+        
+        # 6D转四元数
+        quat_l = self.rot6d_to_quat(rot6d_l)  # wxyz
+        quat_r = self.rot6d_to_quat(rot6d_r)  # wxyz
+        
+        # 添加末尾2个零维度
+        zeros = torch.zeros(B, T, 2, device=actions_6d.device, dtype=actions_6d.dtype)
+        
+        # 拼接成原始格式
+        actions_quat = torch.cat([
+            pos_l, quat_l, grip_l,    # 左臂 8维
+            pos_r, quat_r, grip_r,    # 右臂 8维
+            zeros                     # 2维
+        ], dim=-1)
+        
+        return actions_quat
+        
+    def compute_structured_noise_loss(self, noise_pred, noise_gt, is_pad):
+        """
+        在噪声空间中计算结构化损失
+        """
+        # 左臂噪声
+        noise_pos_l_pred = noise_pred[..., :3]
+        noise_rot6d_l_pred = noise_pred[..., 3:9]
+        noise_grip_l_pred = noise_pred[..., 9:10]
+        
+        noise_pos_l_gt = noise_gt[..., :3]
+        noise_rot6d_l_gt = noise_gt[..., 3:9]
+        noise_grip_l_gt = noise_gt[..., 9:10]
+        
+        # 右臂噪声
+        noise_pos_r_pred = noise_pred[..., 10:13]
+        noise_rot6d_r_pred = noise_pred[..., 13:19]
+        noise_grip_r_pred = noise_pred[..., 19:20]
+        
+        noise_pos_r_gt = noise_gt[..., 10:13]
+        noise_rot6d_r_gt = noise_gt[..., 13:19]
+        noise_grip_r_gt = noise_gt[..., 19:20]
+        
+        # 位置噪声损失
+        pos_loss = F.l1_loss(noise_pos_l_pred, noise_pos_l_gt, reduction='none') + \
+                   F.l1_loss(noise_pos_r_pred, noise_pos_r_gt, reduction='none')
+        
+        # 旋转噪声损失（在6D空间中计算）
+        rot_loss = F.l1_loss(noise_rot6d_l_pred, noise_rot6d_l_gt, reduction='none') + \
+                   F.l1_loss(noise_rot6d_r_pred, noise_rot6d_r_gt, reduction='none')
+        
+        # 夹爪噪声损失
+        grip_loss = F.l1_loss(noise_grip_l_pred, noise_grip_l_gt, reduction='none') + \
+                    F.l1_loss(noise_grip_r_pred, noise_grip_r_gt, reduction='none')
+        
+        # 总结构化损失
+        total_structured_loss = pos_loss.sum(-1) + rot_loss.sum(-1) * 2.0 + grip_loss.sum(-1)
+        
+        # 应用mask
+        masked_loss = (total_structured_loss * ~is_pad).mean()
+        
+        return masked_loss
+        
+    @staticmethod
+    def quat_to_6d(quat):
+        """
+        四元数转6D表示
+        quat: (..., 4) wxyz
+        return: (..., 6)
+        """
+        # 四元数转旋转矩阵
+        quat_norm = F.normalize(quat, dim=-1)
+        w, x, y, z = quat_norm[..., 0], quat_norm[..., 1], quat_norm[..., 2], quat_norm[..., 3]
+        
+        # 旋转矩阵的前两列
+        col1 = torch.stack([1 - 2*(y**2 + z**2), 2*(x*y + z*w), 2*(x*z - y*w)], dim=-1)
+        col2 = torch.stack([2*(x*y - z*w), 1 - 2*(x**2 + z**2), 2*(y*z + x*w)], dim=-1)
+        
+        # 6D表示
+        rot6d = torch.cat([col1, col2], dim=-1)
+        return rot6d
+        
+    @staticmethod
+    def rot6d_to_quat(rot6d):
+        """
+        6D表示转四元数
+        rot6d: (..., 6)
+        return: (..., 4) wxyz
+        """
+        # 6D -> 旋转矩阵
+        a1 = rot6d[..., :3]
+        a2 = rot6d[..., 3:6]
+        
+        def normalize_vector(v, eps=1e-8):
+            return v / (torch.norm(v, dim=-1, keepdim=True) + eps)
+            
+        b1 = normalize_vector(a1)
+        b2 = normalize_vector(a2 - torch.sum(b1 * a2, dim=-1, keepdim=True) * b1)
+        b3 = torch.cross(b1, b2, dim=-1)
+        
+        # 旋转矩阵 -> 四元数
+        R = torch.stack([b1, b2, b3], dim=-1)  # (..., 3, 3)
+        
+        # 矩阵转四元数
+        trace = R[..., 0, 0] + R[..., 1, 1] + R[..., 2, 2]
+        
+        # 批量处理
+        quat = torch.zeros((*R.shape[:-2], 4), device=R.device, dtype=R.dtype)
+        
+        # 使用稳定的转换方法
+        s = torch.sqrt(trace + 1.0 + 1e-8) * 2
+        quat[..., 0] = 0.25 * s  # w
+        quat[..., 1] = (R[..., 2, 1] - R[..., 1, 2]) / s  # x
+        quat[..., 2] = (R[..., 0, 2] - R[..., 2, 0]) / s  # y
+        quat[..., 3] = (R[..., 1, 0] - R[..., 0, 1]) / s  # z
+        
+        return F.normalize(quat, dim=-1)
 
 class ACTPolicy(nn.Module):
     def __init__(self, args_override):

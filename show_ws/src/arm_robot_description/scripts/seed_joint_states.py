@@ -386,9 +386,9 @@ class RobotController:
                 # 积分更新关节角度
                 q = pin.integrate(self.model, q, v * DT)
                 
-                # 调试输出（每10次迭代）
-                if not i % 10:
-                    print(f"IK iteration {i}: error = {err_norm:.6f}")
+                # # 调试输出（每10次迭代）
+                # if not i % 10:
+                #     print(f"IK iteration {i}: error = {err_norm:.6f}")
                 
                 i += 1
             
