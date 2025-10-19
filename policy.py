@@ -10,6 +10,7 @@ e = IPython.embed
 from collections import OrderedDict
 from robomimic.models.base_nets import ResNet18Conv, SpatialSoftmax
 from robomimic.algo.diffusion_policy import replace_bn_with_gn, ConditionalUnet1D
+from diffusion.NewConditionalUnet1D import NewConditionalUnet1D
 
 
 from diffusers.schedulers.scheduling_ddpm import DDPMScheduler
@@ -37,7 +38,7 @@ class DiffusionPolicy(nn.Module):
         self.state_dim = args_override['state_dim'] # get from config instead of hardcoding
         self.obs_dim = self.feature_dimension * len(self.camera_names) + self.state_dim # camera features and proprio
         self.use_ee = args_override.get('use_ee', False)
-        self.structured_loss_weight = 18
+        self.structured_loss_weight = 8
 
         backbones = []
         pools = []
@@ -55,13 +56,13 @@ class DiffusionPolicy(nn.Module):
 
         # 如果是end-effector模式，网络处理20维 (3+6+1)*2，输入18维转换成20维
         network_ac_dim = self.ac_dim + 2 if self.use_ee else self.ac_dim
-        noise_pred_net = ConditionalUnet1D(
+        noise_pred_net = NewConditionalUnet1D(
             input_dim=network_ac_dim,
             global_cond_dim=self.obs_dim*self.observation_horizon
-            ,diffusion_step_embed_dim=1024,
-            down_dims=[1024,2048,4096],
+            ,diffusion_step_embed_dim=128,
+            down_dims=[128, 256, 512],
             kernel_size=5,
-            n_groups=128
+            n_groups=32
         )
 
         nets = nn.ModuleDict({

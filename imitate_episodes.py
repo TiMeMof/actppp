@@ -115,7 +115,7 @@ def main(args):
                          'prediction_horizon': args['chunk_size'],
                          'num_queries': args['chunk_size'],
                          'num_inference_timesteps': 10,
-                         'ema_power': 0.75,
+                         'ema_power': 0.8,
                          'vq': False,
                          'use_ee':use_ee,
                          }
@@ -153,6 +153,7 @@ def main(args):
         'real_robot': not is_sim,
         'load_pretrain': args['load_pretrain'],
         'actuator_config': actuator_config,
+        'diagnostic_every': args['diag_every'],
     }
 
     if not os.path.isdir(ckpt_dir):
@@ -178,6 +179,8 @@ def main(args):
         exit()
 
     train_dataloader, val_dataloader, stats, _ = load_data(config['use_ee'], dataset_dir, name_filter, camera_names, batch_size_train, batch_size_val, args['chunk_size'], args['skip_mirrored_data'], config['load_pretrain'], policy_class, stats_dir_l=stats_dir, sample_weights=sample_weights, train_ratio=train_ratio)
+
+    config['norm_stats'] = stats
 
     # save dataset stats
     stats_path = os.path.join(ckpt_dir, f'dataset_stats.pkl')
@@ -515,7 +518,7 @@ def eval_bc(config, ckpt_name, save_episode=True, num_rollouts=50):
                             # 检测raw_action是否为tensor
                             if not isinstance(raw_action, torch.Tensor):
                                 raw_action = torch.from_numpy(raw_action).float().cuda().unsqueeze(0)
-                            max_delta = 0.05
+                            max_delta = 0.2
                             delta = raw_action - last_action
                             print("delta: ", delta)
                             delta = torch.clamp(delta, -max_delta, max_delta)
@@ -666,9 +669,78 @@ def train_bc(train_dataloader, val_dataloader, config):
     eval_every = config['eval_every']
     validate_every = config['validate_every']
     save_every = config['save_every']
+    diagnostic_every = config.get('diagnostic_every', None)
+    norm_stats = config.get('norm_stats')
+    def run_diagnostic(step_idx: int, batch, forward_dict):
+        if policy_class != 'Diffusion' or config['use_ee'] is False:
+            return
+        if norm_stats is None:
+            return
+
+        policy.eval()
+        with torch.no_grad():
+            image_data, qpos_data, action_data, is_pad = batch
+            image_data = image_data.to(device)
+            qpos_data = qpos_data.to(device)
+            action_data = action_data.to(device)
+            is_pad = is_pad.to(device)
+
+            actions_denorm = (action_data + 1) / 2
+            action_min = torch.from_numpy(norm_stats['action_min']).to(device)
+            action_max = torch.from_numpy(norm_stats['action_max']).to(device)
+            actions_denorm = actions_denorm * (action_max - action_min) + action_min
+
+            qpos_denorm = qpos_data * torch.from_numpy(norm_stats['qpos_std']).to(device) + torch.from_numpy(norm_stats['qpos_mean']).to(device)
+
+            prediction = policy(qpos_data, image_data, actions=None, is_pad=is_pad)
+            prediction_denorm = (prediction + 1) / 2
+            prediction_denorm = prediction_denorm * (action_max - action_min) + action_min
+
+            diff = torch.abs(prediction_denorm - actions_denorm)
+            mask = ~is_pad.unsqueeze(-1)
+            diff = diff * mask
+
+            pos_l_diff = diff[..., :3]
+            quat_l_diff = diff[..., 3:7]
+            grip_l_diff = diff[..., 7]
+            pos_r_diff = diff[..., 8:11]
+            quat_r_diff = diff[..., 11:15]
+            grip_r_diff = diff[..., 15]
+
+            valid_mask = mask[..., 0]
+            if valid_mask.any():
+                pos_l_mae = pos_l_diff[valid_mask].mean().item()
+                pos_r_mae = pos_r_diff[valid_mask].mean().item()
+                quat_l_mae = quat_l_diff[valid_mask].mean().item()
+                quat_r_mae = quat_r_diff[valid_mask].mean().item()
+                grip_l_mae = grip_l_diff[valid_mask].mean().item()
+                grip_r_mae = grip_r_diff[valid_mask].mean().item()
+            else:
+                pos_l_mae = pos_r_mae = quat_l_mae = quat_r_mae = grip_l_mae = grip_r_mae = 0.0
+
+            metrics = {
+                'diag/step': step_idx,
+                'diag/pos_l_mae': pos_l_mae,
+                'diag/pos_r_mae': pos_r_mae,
+                'diag/quat_l_mae': quat_l_mae,
+                'diag/quat_r_mae': quat_r_mae,
+                'diag/grip_l_mae': grip_l_mae,
+                'diag/grip_r_mae': grip_r_mae,
+            }
+
+            print(f"[Diagnostic step {step_idx}] pos_l_mae={metrics['diag/pos_l_mae']:.4f} pos_r_mae={metrics['diag/pos_r_mae']:.4f} "
+                  f"quat_l_mae={metrics['diag/quat_l_mae']:.4f} quat_r_mae={metrics['diag/quat_r_mae']:.4f} "
+                  f"grip_l_mae={metrics['diag/grip_l_mae']:.4f} grip_r_mae={metrics['diag/grip_r_mae']:.4f}")
+
+            try:
+                wandb.log(metrics, step=step_idx)
+            except Exception:
+                pass
+
+        policy.train()
 
     set_seed(seed)
-    device = torch.device('cuda:3' if torch.cuda.is_available() else 'cpu')
+    device = torch.device('cuda:1' if torch.cuda.is_available() else 'cpu')
     policy = make_policy(policy_class, policy_config, device)
     if config['load_pretrain']:
         loading_status = policy.deserialize(torch.load(os.path.join('/home/moyufan/actppp/ckpt/diffusion', 'policy_best.ckpt')))
@@ -733,6 +805,9 @@ def train_bc(train_dataloader, val_dataloader, config):
         optimizer.step()
         wandb.log(forward_dict, step=step) # not great, make training 1-2% slower
 
+        if diagnostic_every is not None and diagnostic_every > 0 and step != 0 and step % diagnostic_every == 0:
+            run_diagnostic(step, data, forward_dict)
+
         if step % save_every == 0:
             ckpt_path = os.path.join(ckpt_dir, f'policy_step_{step}_seed_{seed}.ckpt')
             torch.save(policy.serialize(), ckpt_path)
@@ -777,6 +852,7 @@ if __name__ == '__main__':
     parser.add_argument('--history_len', action='store', type=int)
     parser.add_argument('--future_len', action='store', type=int)
     parser.add_argument('--prediction_len', action='store', type=int)
+    parser.add_argument('--diag_every', action='store', type=int, default=0, help='run diagnostic forward pass every N steps (0 to disable)')
 
     # for ACT
     parser.add_argument('--kl_weight', action='store', type=int, help='KL Weight', required=False)
