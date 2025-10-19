@@ -805,8 +805,8 @@ def train_bc(train_dataloader, val_dataloader, config):
         optimizer.step()
         wandb.log(forward_dict, step=step) # not great, make training 1-2% slower
 
-        if diagnostic_every is not None and diagnostic_every > 0 and step != 0 and step % diagnostic_every == 0:
-            run_diagnostic(step, data, forward_dict)
+        # if diagnostic_every is not None and diagnostic_every > 0 and step != 0 and step % diagnostic_every == 0:
+        #     run_diagnostic(step, data, forward_dict)
 
         if step % save_every == 0:
             ckpt_path = os.path.join(ckpt_dir, f'policy_step_{step}_seed_{seed}.ckpt')
