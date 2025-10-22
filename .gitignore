@@ -150,3 +150,5 @@ ckpts/
 play.ipynb
 
 ckpt/
+evalee.sh
+trainee.sh
