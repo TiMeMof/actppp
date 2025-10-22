@@ -1,0 +1,39 @@
+# Train EE (ACT) config converted from .vscode/launch.json "train ee"
+eval: false
+task_name: "sim_transfer_cube_ee"
+ckpt_dir: "ckpt/act1"
+load_pretrain: false
+load_path: ""
+cuda_device_num: '3'
+policy_class: "ACT"
+kl_weight: 10
+chunk_size: 100
+hidden_dim: 512
+batch_size: 8
+dim_feedforward: 3200
+num_steps: 10000
+lr: 1e-5
+seed: 0
+eval_every: 500
+validate_every: 500
+save_every: 1000
+resume_ckpt_path: ""
+actuator_network_dir: None
+history_len: None
+future_len: None
+prediction_len: None
+diag_every: 0
+use_vq: false
+vq_class: None
+vq_dim: None
+no_encoder: false
+temporal_agg: false
+skip_mirrored_data: true
+# other defaults
+use_ee: true
+onscreen_render: false
+hydra:
+  run:
+    dir: .
+  job:
+    name: train_ee

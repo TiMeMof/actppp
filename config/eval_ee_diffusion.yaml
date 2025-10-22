@@ -1,0 +1,36 @@
+# Eval EE Diffusion config converted from .vscode/launch.json "eval ee diffusion"
+eval: true
+task_name: "sim_transfer_cube_ee"
+ckpt_dir: "ckpt/diffusion2"
+policy_class: "Diffusion"
+cuda_device_num: '3'
+kl_weight: 10
+chunk_size: 20
+batch_size: 8
+num_steps: 20000
+lr: 1e-5
+seed: 0
+eval_every: 500
+validate_every: 500
+save_every: 1000
+resume_ckpt_path: None
+actuator_network_dir: None
+history_len: None
+future_len: None
+prediction_len: None
+load_pretrain: false
+diag_every: 0
+use_vq: false
+vq_class: None
+vq_dim: None
+no_encoder: false
+use_ee: true
+temporal_agg: true
+# other defaults
+onscreen_render: true
+hidra_override_example: null
+hydra:
+  run:
+    dir: .
+  job:
+    name: eval_ee_diffusion

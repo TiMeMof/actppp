@@ -1,0 +1,78 @@
+# Hydra config for imitate_episodes
+# Populate fields matching the original argparse flags. You can override any with command-line like:
+# python imitate_episodes.py task_name=sim_transfer_cube_ee ckpt_dir=ckpt/diffusion2
+
+# top-level booleans
+eval: false
+onscreen_render: false
+cuda_device_num: '3'
+
+# paths and modes
+ckpt_dir: "ckpt/diffusion2"
+policy_class: "Diffusion"
+task_name: "sim_transfer_cube_ee"
+
+# training hyperparams
+batch_size: 8
+seed: 0
+num_steps: 10000
+lr: 1e-5
+load_pretrain: false
+
+# scheduling / checkpoints
+eval_every: 500
+validate_every: 500
+save_every: 1000
+resume_ckpt_path: ""
+skip_mirrored_data: false
+
+# actuator network options (optional)
+actuator_network_dir: null
+history_len: 0
+future_len: 0
+prediction_len: 0
+
+# diagnostics
+diag_every: 0
+
+# ACT / Diffusion specific
+kl_weight: 10
+chunk_size: 20
+hidden_dim: 512
+dim_feedforward: 3200
+temporal_agg: false
+use_vq: false
+vq_class: 512
+vq_dim: 512
+no_encoder: false
+use_ee: true
+
+# camera and data related defaults
+camera_names:
+  - top
+  - left_wrist
+  - right_wrist
+
+# policy sub-config placeholder (kept flexible)
+policy_config:
+  num_queries: 1
+  action_dim: 18
+  vq: false
+  vq_dim: 512
+  vq_class: 512
+
+# dataset / loader options
+dataset_dir: "data/sim_transfer_cube_ee"
+name_filter: ""
+batch_size_train: 8
+batch_size_val: 8
+stats_dir: ""
+train_ratio: 0.9
+sample_weights: null
+
+# hydra control (keep working dir same)
+hydra:
+  run:
+    dir: .
+  job:
+    name: imitate_episodes

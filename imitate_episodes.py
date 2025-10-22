@@ -52,6 +52,7 @@ def main(args):
     save_every = args['save_every']
     resume_ckpt_path = args['resume_ckpt_path']
     use_ee = args['use_ee']
+    cuda_device_num = args['cuda_device_num']
 
     # get task parameters
     is_sim = task_name[:4] == 'sim_'
@@ -86,6 +87,11 @@ def main(args):
         dec_layers = 7
         nheads = 8
         policy_config = {'lr': args['lr'],
+                         'ckpt_dir': ckpt_dir,
+                         'policy_class': policy_class,
+                         'task_name': task_name,
+                         'seed': args['seed'],
+                         'num_steps': num_steps,
                          'num_queries': args['chunk_size'],
                          'kl_weight': args['kl_weight'],
                          'hidden_dim': args['hidden_dim'],
@@ -152,6 +158,8 @@ def main(args):
         'camera_names': camera_names,
         'real_robot': not is_sim,
         'load_pretrain': args['load_pretrain'],
+        'load_path': args['load_path'],
+        'cuda_device': 'cuda:'+args['cuda_device_num'],
         'actuator_config': actuator_config,
         'diagnostic_every': args['diag_every'],
     }
@@ -268,7 +276,7 @@ def eval_bc(config, ckpt_name, save_episode=True, num_rollouts=50):
 
     # load policy and stats
     ckpt_path = os.path.join(ckpt_dir, ckpt_name)
-    device = torch.device('cuda:3' if torch.cuda.is_available() else 'cpu')
+    device = torch.device(config['cuda_device'] if torch.cuda.is_available() else 'cpu')
     policy = make_policy(policy_class, policy_config, device)
     loading_status = policy.deserialize(torch.load(ckpt_path))
     print(loading_status)
@@ -740,14 +748,21 @@ def train_bc(train_dataloader, val_dataloader, config):
         policy.train()
 
     set_seed(seed)
-    device = torch.device('cuda:1' if torch.cuda.is_available() else 'cpu')
+    device = torch.device(config['cuda_device'] if torch.cuda.is_available() else 'cpu')
     policy = make_policy(policy_class, policy_config, device)
     if config['load_pretrain']:
-        loading_status = policy.deserialize(torch.load(os.path.join('/home/moyufan/actppp/ckpt/diffusion', 'policy_best.ckpt')))
+        loading_status = policy.deserialize(torch.load(os.path.join(config['load_path'], 'policy_best.ckpt')))
         print(f'loaded! {loading_status}')
-    if config['resume_ckpt_path'] is not None:
-        loading_status = policy.deserialize(torch.load(config['resume_ckpt_path']))
-        print(f'Resume policy from: {config["resume_ckpt_path"]}, Status: {loading_status}')
+    resume_path = config.get('resume_ckpt_path')
+    if resume_path:
+        if os.path.isfile(resume_path):
+            try:
+                loading_status = policy.deserialize(torch.load(resume_path))
+                print(f'Resume policy from: {resume_path}, Status: {loading_status}')
+            except Exception as e:
+                print(f'Warning: failed to load resume checkpoint from {resume_path}: {e}')
+        else:
+            print(f'Warning: resume_ckpt_path set but file does not exist: {resume_path}')
     # policy.cuda()
     policy.to(device=device)
     optimizer = make_optimizer(policy_class, policy)
@@ -831,39 +846,63 @@ def repeater(data_loader):
         epoch += 1
 
 
-if __name__ == '__main__':
-    parser = argparse.ArgumentParser()
-    parser.add_argument('--eval', action='store_true')
-    parser.add_argument('--onscreen_render', action='store_true')
-    parser.add_argument('--ckpt_dir', action='store', type=str, help='ckpt_dir', required=True)
-    parser.add_argument('--policy_class', action='store', type=str, help='policy_class, capitalize', required=True)
-    parser.add_argument('--task_name', action='store', type=str, help='task_name', required=True)
-    parser.add_argument('--batch_size', action='store', type=int, help='batch_size', required=True)
-    parser.add_argument('--seed', action='store', type=int, help='seed', required=True)
-    parser.add_argument('--num_steps', action='store', type=int, help='num_steps', required=True)
-    parser.add_argument('--lr', action='store', type=float, help='lr', required=True)
-    parser.add_argument('--load_pretrain', action='store_true', default=False)
-    parser.add_argument('--eval_every', action='store', type=int, default=500, help='eval_every', required=False)
-    parser.add_argument('--validate_every', action='store', type=int, default=500, help='validate_every', required=False)
-    parser.add_argument('--save_every', action='store', type=int, default=1000, help='save_every', required=False)
-    parser.add_argument('--resume_ckpt_path', action='store', type=str, help='resume_ckpt_path', required=False)
-    parser.add_argument('--skip_mirrored_data', action='store_true')
-    parser.add_argument('--actuator_network_dir', action='store', type=str, help='actuator_network_dir', required=False)
-    parser.add_argument('--history_len', action='store', type=int)
-    parser.add_argument('--future_len', action='store', type=int)
-    parser.add_argument('--prediction_len', action='store', type=int)
-    parser.add_argument('--diag_every', action='store', type=int, default=0, help='run diagnostic forward pass every N steps (0 to disable)')
+try:
+    # prefer hydra if available
+    import hydra
+    from omegaconf import OmegaConf
+except Exception:
+    hydra = None
 
-    # for ACT
-    parser.add_argument('--kl_weight', action='store', type=int, help='KL Weight', required=False)
-    parser.add_argument('--chunk_size', action='store', type=int, help='chunk_size', required=False)
-    parser.add_argument('--hidden_dim', action='store', type=int, help='hidden_dim', required=False)
-    parser.add_argument('--dim_feedforward', action='store', type=int, help='dim_feedforward', required=False)
-    parser.add_argument('--temporal_agg', action='store_true')
-    parser.add_argument('--use_vq', action='store_true')
-    parser.add_argument('--vq_class', action='store', type=int, help='vq_class')
-    parser.add_argument('--vq_dim', action='store', type=int, help='vq_dim')
-    parser.add_argument('--no_encoder', action='store_true')
-    parser.add_argument('--use_ee', action='store_true', help='use_ee')
-    
-    main(vars(parser.parse_args()))
+
+def _call_main_from_omegaconf(cfg):
+    # Convert OmegaConf to plain dict, map nested configs to expected flat args
+    cfg_dict = OmegaConf.to_container(cfg, resolve=True)
+    # The existing main() expects a flat dict of args; keep it compatible by returning the top-level mapping
+    # If user passes a nested 'policy' or other subconfigs, keep them as dictionaries.
+    main(cfg_dict)
+
+if __name__ == '__main__':
+    if hydra is not None:
+        @hydra.main(config_path='config', config_name='dp')
+        def hydra_entry(cfg):
+            _call_main_from_omegaconf(cfg)
+
+
+        hydra_entry()
+    else:
+        # Fallback to argparse for environments without hydra
+        parser = argparse.ArgumentParser()
+        parser.add_argument('--eval', action='store_true')
+        parser.add_argument('--onscreen_render', action='store_true')
+        parser.add_argument('--ckpt_dir', action='store', type=str, help='ckpt_dir', required=True)
+        parser.add_argument('--policy_class', action='store', type=str, help='policy_class, capitalize', required=True)
+        parser.add_argument('--task_name', action='store', type=str, help='task_name', required=True)
+        parser.add_argument('--batch_size', action='store', type=int, help='batch_size', required=True)
+        parser.add_argument('--seed', action='store', type=int, help='seed', required=True)
+        parser.add_argument('--num_steps', action='store', type=int, help='num_steps', required=True)
+        parser.add_argument('--lr', action='store', type=float, help='lr', required=True)
+        parser.add_argument('--load_pretrain', action='store_true', default=False)
+        parser.add_argument('--eval_every', action='store', type=int, default=500, help='eval_every', required=False)
+        parser.add_argument('--validate_every', action='store', type=int, default=500, help='validate_every', required=False)
+        parser.add_argument('--save_every', action='store', type=int, default=1000, help='save_every', required=False)
+        parser.add_argument('--resume_ckpt_path', action='store', type=str, help='resume_ckpt_path', required=False)
+        parser.add_argument('--skip_mirrored_data', action='store_true')
+        parser.add_argument('--actuator_network_dir', action='store', type=str, help='actuator_network_dir', required=False)
+        parser.add_argument('--history_len', action='store', type=int)
+        parser.add_argument('--future_len', action='store', type=int)
+        parser.add_argument('--prediction_len', action='store', type=int)
+        parser.add_argument('--diag_every', action='store', type=int, default=0, help='run diagnostic forward pass every N steps (0 to disable)')
+
+        # for ACT
+        parser.add_argument('--kl_weight', action='store', type=int, help='KL Weight', required=False)
+        parser.add_argument('--chunk_size', action='store', type=int, help='chunk_size', required=False)
+        parser.add_argument('--hidden_dim', action='store', type=int, help='hidden_dim', required=False)
+        parser.add_argument('--dim_feedforward', action='store', type=int, help='dim_feedforward', required=False)
+        parser.add_argument('--temporal_agg', action='store_true')
+        parser.add_argument('--use_vq', action='store_true')
+        parser.add_argument('--vq_class', action='store', type=int, help='vq_class')
+        parser.add_argument('--vq_dim', action='store', type=int, help='vq_dim')
+        parser.add_argument('--no_encoder', action='store_true')
+        parser.add_argument('--use_ee', action='store_true', help='use_ee')
+        
+        main(vars(parser.parse_args()))
